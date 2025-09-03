@@ -42,7 +42,9 @@ class ScreenCapture:
         # 이미지 설정
         self.image_format = tk.StringVar(value="JPEG")  # "JPEG" 또는 "WEBP"
         self.image_quality = tk.IntVar(value=80)  # 1-100
+        self.image_quality_value = tk.DoubleVar(value=80.0)  # Scale용 실수 값
         self.image_resolution = tk.StringVar(value="원본")  # 해상도 설정
+        self.image_grayscale = tk.BooleanVar(value=False)  # 흑백 변환 설정
 
         # 저장 폴더 설정
         self.save_folder = "screenshots"
@@ -268,7 +270,7 @@ class ScreenCapture:
 
         ttk.Label(quality_frame, text="품질:").pack(side=tk.LEFT, padx=(0, 5))
         quality_scale = ttk.Scale(quality_frame, from_=1, to=100, orient=tk.HORIZONTAL,
-                                 variable=self.image_quality, command=self.update_quality_display)
+                                 variable=self.image_quality_value, command=self.update_quality_display)
         quality_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         quality_label = ttk.Label(quality_frame, textvariable=self.image_quality)
         quality_label.pack(side=tk.LEFT, padx=(5, 0))
@@ -282,6 +284,14 @@ class ScreenCapture:
         resolution_combo = ttk.Combobox(resolution_frame, textvariable=self.image_resolution,
                                        values=resolutions, state="readonly", width=12)
         resolution_combo.pack(side=tk.LEFT, padx=(0, 5))
+
+        # 흑백 변환 설정 프레임
+        grayscale_frame = ttk.Frame(image_frame)
+        grayscale_frame.pack(fill=tk.X, pady=5)
+
+        self.grayscale_checkbox = ttk.Checkbutton(grayscale_frame, text="흑백 변환",
+                                                 variable=self.image_grayscale)
+        self.grayscale_checkbox.pack(anchor=tk.W)
 
         # 상태 표시
         self.status_label = ttk.Label(main_frame, text="대기 중...",
@@ -312,11 +322,18 @@ class ScreenCapture:
         # 창 닫기 이벤트 처리
         self.root.protocol("WM_DELETE_WINDOW", self.quit_program)
 
-    def update_quality_display(self, value):
+    def update_quality_display(self, value=None):
         """품질 값이 변경될 때 정수로 변환하여 표시"""
         try:
+            if value is None:
+                # 직접 호출된 경우 현재 Scale 값 사용
+                current_value = self.image_quality_value.get()
+            else:
+                # 콜백에서 호출된 경우 파라미터 값 사용
+                current_value = float(value)
+
             # 실수 값을 정수로 변환
-            int_value = int(float(value))
+            int_value = int(current_value)
             self.image_quality.set(int_value)
         except (ValueError, TypeError):
             # 변환 실패 시 현재 값 유지
@@ -722,6 +739,10 @@ class ScreenCapture:
                     width, height = map(int, self.image_resolution.get().split('x'))
                     screenshot_with_time.thumbnail((width, height), Image.LANCZOS)
 
+                # 흑백 변환 적용
+                if self.image_grayscale.get():
+                    screenshot_with_time = screenshot_with_time.convert('L')
+
                 # 파일명 생성 (타임스탬프 포함)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # 밀리초까지
                 format_ext = "webp" if self.image_format.get() == "WEBP" else "jpg"
@@ -729,10 +750,11 @@ class ScreenCapture:
                 filepath = os.path.join(self.save_folder, filename)
 
                 # 선택된 포맷과 품질로 저장
+                quality_value = int(self.image_quality_value.get())
                 if self.image_format.get() == "WEBP":
-                    screenshot_with_time.save(filepath, "WEBP", quality=self.image_quality.get())
+                    screenshot_with_time.save(filepath, "WEBP", quality=quality_value)
                 else:
-                    screenshot_with_time.save(filepath, "JPEG", quality=self.image_quality.get(), optimize=True)
+                    screenshot_with_time.save(filepath, "JPEG", quality=quality_value, optimize=True)
                 
                 capture_count += 1
                 
