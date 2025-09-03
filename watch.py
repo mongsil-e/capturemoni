@@ -39,6 +39,12 @@ class ScreenCapture:
         self.resource_monitor_thread = None
         self.current_process = None
 
+        # 파일 시스템 작업 동기화를 위한 락
+        self.file_lock = threading.Lock()
+
+        # 스레드 종료 신호
+        self.stop_event = threading.Event()
+
         # 이미지 설정
         self.image_format = tk.StringVar(value="JPEG")  # "JPEG" 또는 "WEBP"
         self.image_quality = tk.IntVar(value=80)  # 1-100
@@ -480,10 +486,10 @@ class ScreenCapture:
         """자동 삭제 타이머 작업자"""
         cleanup_seconds = self.get_cleanup_interval_seconds()
         
-        while self.is_capturing and self.auto_cleanup_enabled.get():
+        while self.is_capturing and self.auto_cleanup_enabled.get() and not self.stop_event.is_set():
             time.sleep(1)  # 1초마다 체크
             
-            if not self.is_capturing:  # 캡처가 중지되면 종료
+            if not self.is_capturing or self.stop_event.is_set():  # 캡처가 중지되거나 종료 신호가 오면 종료
                 break
                 
             current_time = time.time()
@@ -557,7 +563,7 @@ class ScreenCapture:
     
     def resource_monitor_worker(self):
         """프로그램 리소스 모니터링 작업자"""
-        while self.resource_monitor_enabled.get():
+        while self.resource_monitor_enabled.get() and not self.stop_event.is_set():
             try:
                 if self.current_process is None:
                     # 프로세스가 없으면 재초기화 시도
@@ -594,21 +600,32 @@ class ScreenCapture:
                 time.sleep(5)  # 오류 발생 시 5초 대기 후 재시도
     
     def get_folder_size_mb(self, folder_path):
-        """폴더 크기를 MB 단위로 계산"""
+        """폴더 크기를 MB 단위로 계산 (os.scandir 사용)"""
         total_size = 0
+
+        def calculate_size_recursive(path):
+            nonlocal total_size
+            try:
+                with os.scandir(path) as entries:
+                    for entry in entries:
+                        try:
+                            if entry.is_file():
+                                total_size += entry.stat().st_size
+                            elif entry.is_dir():
+                                calculate_size_recursive(entry.path)
+                        except (OSError, FileNotFoundError):
+                            # 파일이 삭제되었거나 접근할 수 없는 경우 무시
+                            pass
+            except (PermissionError, FileNotFoundError):
+                # 폴더에 접근할 수 없는 경우 무시
+                pass
+
         try:
-            for dirpath, dirnames, filenames in os.walk(folder_path):
-                for filename in filenames:
-                    file_path = os.path.join(dirpath, filename)
-                    try:
-                        total_size += os.path.getsize(file_path)
-                    except (OSError, FileNotFoundError):
-                        # 파일이 삭제되었거나 접근할 수 없는 경우 무시
-                        pass
+            calculate_size_recursive(folder_path)
         except Exception as e:
             self.logger.warning(f"폴더 크기 계산 오류: {str(e)}")
             return 0
-        
+
         return total_size / (1024 * 1024)  # 바이트를 MB로 변환
     
     def update_resource_display(self, cpu_percent, memory_mb, folder_size_mb):
@@ -653,16 +670,18 @@ class ScreenCapture:
             # screenshots 폴더의 모든 이미지 파일 삭제
             deleted_count = 0
             failed_count = 0
-            
-            for filename in os.listdir(self.save_folder):
-                if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
-                    file_path = os.path.join(self.save_folder, filename)
-                    
-                    # 안전한 삭제 함수 사용
-                    if self.safe_delete_file(file_path):
-                        deleted_count += 1
-                    else:
-                        failed_count += 1
+
+            # 파일 시스템 작업 시 락 획득 (경쟁 상태 방지)
+            with self.file_lock:
+                for filename in os.listdir(self.save_folder):
+                    if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
+                        file_path = os.path.join(self.save_folder, filename)
+
+                        # 안전한 삭제 함수 사용
+                        if self.safe_delete_file(file_path):
+                            deleted_count += 1
+                        else:
+                            failed_count += 1
             
             # 결과 로깅
             if failed_count > 0:
@@ -726,7 +745,7 @@ class ScreenCapture:
         """화면 캡처 함수"""
         capture_count = 0
         
-        while self.is_capturing:
+        while self.is_capturing and not self.stop_event.is_set():
             try:
                 # 전체 화면 캡처
                 screenshot = ImageGrab.grab()
@@ -749,12 +768,14 @@ class ScreenCapture:
                 filename = f"screenshot_{timestamp}.{format_ext}"
                 filepath = os.path.join(self.save_folder, filename)
 
-                # 선택된 포맷과 품질로 저장
-                quality_value = int(self.image_quality_value.get())
-                if self.image_format.get() == "WEBP":
-                    screenshot_with_time.save(filepath, "WEBP", quality=quality_value)
-                else:
-                    screenshot_with_time.save(filepath, "JPEG", quality=quality_value, optimize=True)
+                # 파일 저장 시 락 획득 (경쟁 상태 방지)
+                with self.file_lock:
+                    # 선택된 포맷과 품질로 저장
+                    quality_value = int(self.image_quality_value.get())
+                    if self.image_format.get() == "WEBP":
+                        screenshot_with_time.save(filepath, "WEBP", quality=quality_value)
+                    else:
+                        screenshot_with_time.save(filepath, "JPEG", quality=quality_value, optimize=True)
                 
                 capture_count += 1
                 
@@ -796,6 +817,7 @@ class ScreenCapture:
             
             # 캡처 시작
             self.is_capturing = True
+            self.stop_event.clear()  # 중지 신호 초기화
             self.start_button.config(text="캡처 정지")
             self.status_label.config(text="캡처 준비 중...")
             
@@ -848,6 +870,7 @@ class ScreenCapture:
         if self.is_capturing:
             # 캡처 중이면 먼저 정지
             self.is_capturing = False
+            self.stop_event.set()  # 스레드 중지 신호 설정
             self.interval_entry.config(state='normal')  # 입력 필드 다시 활성화
             self.apply_button.config(state='normal')
             self.path_button.config(state='normal')  # 경로 버튼 다시 활성화
@@ -856,8 +879,11 @@ class ScreenCapture:
                 self.cleanup_hours_spinbox.config(state='normal')
                 self.cleanup_minutes_spinbox.config(state='normal')
             if self.capture_thread and self.capture_thread.is_alive():
-                self.capture_thread.join(timeout=2)
-                self.logger.info("캡처 스레드 정리 완료")
+                self.capture_thread.join(timeout=5)  # 더 긴 타임아웃으로 정상 종료 대기
+                if self.capture_thread.is_alive():
+                    self.logger.warning("캡처 스레드가 정상적으로 종료되지 않음")
+                else:
+                    self.logger.info("캡처 스레드 정리 완료")
         
         # 리소스 모니터링 중지
         if self.resource_monitor_enabled.get():
