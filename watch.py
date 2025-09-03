@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-from PIL import ImageGrab, ImageDraw, ImageFont
+from PIL import ImageGrab, ImageDraw, ImageFont, Image
 import threading
 import time
 import os
@@ -13,7 +13,7 @@ class ScreenCapture:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("화면 캡처")
-        self.root.geometry("450x730")  # 높이 증가 (리소스 모니터링 영역 추가)
+        self.root.geometry("450x900")  # 높이 증가 (이미지 설정 영역 추가)
         self.root.resizable(False, False)
         
         # 로깅 설정
@@ -38,7 +38,12 @@ class ScreenCapture:
         self.resource_monitor_enabled = tk.BooleanVar(value=True)
         self.resource_monitor_thread = None
         self.current_process = None
-        
+
+        # 이미지 설정
+        self.image_format = tk.StringVar(value="JPEG")  # "JPEG" 또는 "WEBP"
+        self.image_quality = tk.IntVar(value=80)  # 1-100
+        self.image_resolution = tk.StringVar(value="원본")  # 해상도 설정
+
         # 저장 폴더 설정
         self.save_folder = "screenshots"
         if not os.path.exists(self.save_folder):
@@ -245,8 +250,41 @@ class ScreenCapture:
                                    font=("Arial", 9), foreground="blue")
         self.disk_label.pack(side=tk.LEFT)
         
+        # 이미지 설정 프레임
+        image_frame = ttk.LabelFrame(main_frame, text="이미지 설정", padding="8")
+        image_frame.pack(fill=tk.X, pady=8)
+
+        # 포맷 선택 프레임
+        format_frame = ttk.Frame(image_frame)
+        format_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(format_frame, text="포맷:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Radiobutton(format_frame, text="JPEG", variable=self.image_format, value="JPEG").pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Radiobutton(format_frame, text="WebP", variable=self.image_format, value="WEBP").pack(side=tk.LEFT)
+
+        # 품질 설정 프레임
+        quality_frame = ttk.Frame(image_frame)
+        quality_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(quality_frame, text="품질:").pack(side=tk.LEFT, padx=(0, 5))
+        quality_scale = ttk.Scale(quality_frame, from_=1, to=100, orient=tk.HORIZONTAL,
+                                 variable=self.image_quality, command=self.update_quality_display)
+        quality_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        quality_label = ttk.Label(quality_frame, textvariable=self.image_quality)
+        quality_label.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 해상도 설정 프레임
+        resolution_frame = ttk.Frame(image_frame)
+        resolution_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(resolution_frame, text="해상도:").pack(side=tk.LEFT, padx=(0, 5))
+        resolutions = ["원본", "1920x1080", "1280x720", "1024x768", "800x600"]
+        resolution_combo = ttk.Combobox(resolution_frame, textvariable=self.image_resolution,
+                                       values=resolutions, state="readonly", width=12)
+        resolution_combo.pack(side=tk.LEFT, padx=(0, 5))
+
         # 상태 표시
-        self.status_label = ttk.Label(main_frame, text="대기 중...", 
+        self.status_label = ttk.Label(main_frame, text="대기 중...",
                                      font=("Arial", 10))
         self.status_label.pack(pady=5)
         
@@ -273,6 +311,16 @@ class ScreenCapture:
         
         # 창 닫기 이벤트 처리
         self.root.protocol("WM_DELETE_WINDOW", self.quit_program)
+
+    def update_quality_display(self, value):
+        """품질 값이 변경될 때 정수로 변환하여 표시"""
+        try:
+            # 실수 값을 정수로 변환
+            int_value = int(float(value))
+            self.image_quality.set(int_value)
+        except (ValueError, TypeError):
+            # 변환 실패 시 현재 값 유지
+            pass
     
     def validate_interval(self, event=None):
         """간격 입력값 실시간 검증"""
@@ -590,7 +638,7 @@ class ScreenCapture:
             failed_count = 0
             
             for filename in os.listdir(self.save_folder):
-                if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp')):
+                if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
                     file_path = os.path.join(self.save_folder, filename)
                     
                     # 안전한 삭제 함수 사용
@@ -668,14 +716,23 @@ class ScreenCapture:
                 
                 # 현재 시간 오버레이 추가
                 screenshot_with_time = self.add_timestamp_overlay(screenshot)
-                
+
+                # 해상도 조정 적용 (thumbnail 사용)
+                if self.image_resolution.get() != "원본":
+                    width, height = map(int, self.image_resolution.get().split('x'))
+                    screenshot_with_time.thumbnail((width, height), Image.LANCZOS)
+
                 # 파일명 생성 (타임스탬프 포함)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # 밀리초까지
-                filename = f"screenshot_{timestamp}.jpg"
+                format_ext = "webp" if self.image_format.get() == "WEBP" else "jpg"
+                filename = f"screenshot_{timestamp}.{format_ext}"
                 filepath = os.path.join(self.save_folder, filename)
-                
-                # 이미지 최적화하여 저장 (용량 줄이기)
-                screenshot_with_time.save(filepath, "JPEG", quality=75, optimize=True)
+
+                # 선택된 포맷과 품질로 저장
+                if self.image_format.get() == "WEBP":
+                    screenshot_with_time.save(filepath, "WEBP", quality=self.image_quality.get())
+                else:
+                    screenshot_with_time.save(filepath, "JPEG", quality=self.image_quality.get(), optimize=True)
                 
                 capture_count += 1
                 
