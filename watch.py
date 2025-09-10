@@ -10,7 +10,7 @@ from datetime import datetime
 
 
 class RollingCleanup:
-    """순환 삭제 스레드 클래스 - 10분마다 지정된 시간이 지난 파일 삭제"""
+    """자동 삭제 스레드 클래스 - 10분마다 지정된 시간이 지난 파일 삭제"""
 
     def __init__(self, save_folder, logger, stop_event, cleanup_age_seconds):
         self.save_folder = save_folder
@@ -33,7 +33,7 @@ class RollingCleanup:
         self.thread = threading.Thread(target=self._cleanup_worker, daemon=True)
         self.thread.start()
         cleanup_age_hours = self.cleanup_age_seconds / 3600
-        self.logger.info(f"순환 삭제 스레드 시작됨 (10분마다 {cleanup_age_hours:.1f}시간이 지난 파일 삭제)")
+        self.logger.info(f"자동 삭제 스레드 시작됨 (10분마다 {cleanup_age_hours:.1f}시간이 지난 파일 삭제)")
 
     def stop(self):
         """정리 스레드 중지"""
@@ -45,14 +45,14 @@ class RollingCleanup:
             # 스레드가 종료될 때까지 대기 (개선된 응답성으로 타임아웃 단축)
             self.thread.join(timeout=1.0)  # 2초에서 1초로 단축
             if self.thread.is_alive():
-                self.logger.warning("순환 삭제 스레드가 정상적으로 종료되지 않았습니다")
-        self.logger.info("순환 삭제 스레드 중지됨")
+                self.logger.warning("자동 삭제 스레드가 정상적으로 종료되지 않았습니다")
+        self.logger.info("자동 삭제 스레드 중지됨")
 
     def update_cleanup_age(self, new_cleanup_age_seconds):
         """삭제 주기(age)를 동적으로 업데이트"""
         self.cleanup_age_seconds = new_cleanup_age_seconds
         cleanup_age_hours = self.cleanup_age_seconds / 3600
-        self.logger.info(f"순환 삭제 주기가 {cleanup_age_hours:.1f}시간으로 업데이트되었습니다.")
+        self.logger.info(f"자동 삭제 주기가 {cleanup_age_hours:.1f}시간으로 업데이트되었습니다.")
 
     def _cleanup_worker(self):
         """정리 작업자 스레드"""
@@ -94,7 +94,7 @@ class RollingCleanup:
             cutoff_time = current_time - self.cleanup_age_seconds # 설정된 시간 사용
 
             cleanup_age_hours = self.cleanup_age_seconds / 3600
-            self.logger.info(f"순환 삭제 시작 - {cleanup_age_hours:.1f}시간이 지난 파일을 스캔하여 삭제합니다...")
+            self.logger.info(f"자동 삭제 시작 - {cleanup_age_hours:.1f}시간이 지난 파일을 스캔하여 삭제합니다...")
 
             # 파일 시스템 작업 시 락 획득
             with self.file_lock:
@@ -141,12 +141,12 @@ class RollingCleanup:
 
             # 결과 로깅
             if deleted_count > 0 or failed_count > 0:
-                self.logger.info(f"순환 삭제 완료: 삭제 {deleted_count}개, 실패 {failed_count}개")
+                self.logger.info(f"자동 삭제 완료: 삭제 {deleted_count}개, 실패 {failed_count}개")
             else:
-                self.logger.debug("순환 삭제 완료: 삭제할 파일 없음")
+                self.logger.debug("자동 삭제 완료: 삭제할 파일 없음")
 
         except Exception as e:
-            self.logger.error(f"순환 삭제 중 오류: {str(e)}")
+            self.logger.error(f"자동 삭제 중 오류: {str(e)}")
 
     def _safe_delete_file(self, file_path, max_retries=3, retry_delay=1):
         """안전한 파일 삭제"""
@@ -181,7 +181,7 @@ class RollingCleanup:
 class ScreenCapture:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("화면 캡처")
+        self.root.title("화면 모니터링")
         self.root.geometry("450x900")  # 높이 증가 (이미지 설정 영역 추가)
         self.root.resizable(False, False)
         
@@ -195,9 +195,9 @@ class ScreenCapture:
         # 캡처 간격 설정 (초)
         self.capture_interval = tk.DoubleVar(value=2.0)
         
-        # 순환 삭제 설정 (Rolling Cleanup) - 10분마다 24시간 지난 파일 삭제
+        # 자동 삭제 설정 (Rolling Cleanup) - 10분마다 설정된 시간이 지난 파일 삭제
         self.rolling_cleanup_enabled = tk.BooleanVar(value=False)
-        self.rolling_cleanup_age_value = tk.DoubleVar(value=24.0) # 삭제 주기 값
+        self.rolling_cleanup_age_value = tk.DoubleVar(value=1.0) # 삭제 주기 값 (기본 1시간)
         self.rolling_cleanup_age_unit = tk.StringVar(value="시간") # 삭제 주기 단위
         self.rolling_cleanup = None  # RollingCleanup 인스턴스
         self.cleanup_timer_job = None # 타이머 작업을 위한 변수
@@ -300,7 +300,7 @@ class ScreenCapture:
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # 제목
-        title_label = ttk.Label(main_frame, text="화면 캡처", 
+        title_label = ttk.Label(main_frame, text="화면 모니터링", 
                                font=("Arial", 14, "bold"))
         title_label.pack(pady=10)
         
@@ -350,12 +350,12 @@ class ScreenCapture:
                                      command=self.select_save_path)
         self.path_button.pack(side=tk.LEFT)
         
-        # 순환 삭제 설정 프레임
-        cleanup_frame = ttk.LabelFrame(main_frame, text="순환 삭제 설정", padding="8")
+        # 자동 삭제 설정 프레임
+        cleanup_frame = ttk.LabelFrame(main_frame, text="자동 삭제 설정", padding="8")
         cleanup_frame.pack(fill=tk.X, pady=8)
 
-        # 순환 삭제 활성화 체크박스
-        self.cleanup_checkbox = ttk.Checkbutton(cleanup_frame, text="순환 삭제 활성화 (지정된 시간보다 오래된 파일 자동 삭제)",
+        # 자동 삭제 활성화 체크박스
+        self.cleanup_checkbox = ttk.Checkbutton(cleanup_frame, text=" 삭제 활성화 (지정된 시간보다 오래된 파일 자동 삭제)",
                                                variable=self.rolling_cleanup_enabled,
                                                command=self.toggle_cleanup_settings)
         self.cleanup_checkbox.pack(anchor=tk.W, pady=(0, 5))
@@ -364,7 +364,7 @@ class ScreenCapture:
         cleanup_interval_frame = ttk.Frame(cleanup_frame)
         cleanup_interval_frame.pack(fill=tk.X, pady=5, padx=5)
 
-        ttk.Label(cleanup_interval_frame, text="삭제 주기:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(cleanup_interval_frame, text="지정 시간:").pack(side=tk.LEFT, padx=(0, 5))
         
         self.cleanup_age_entry = ttk.Entry(cleanup_interval_frame, width=8, textvariable=self.rolling_cleanup_age_value)
         self.cleanup_age_entry.pack(side=tk.LEFT, padx=5)
@@ -566,7 +566,7 @@ class ScreenCapture:
         self.path_label.config(text=f"현재 경로: {display_path}")
     
     def validate_cleanup_interval(self):
-        """순환 삭제 주기 유효성 검사"""
+        """자동 삭제 주기 유효성 검사"""
         try:
             value = self.rolling_cleanup_age_value.get()
             unit = self.rolling_cleanup_age_unit.get()
@@ -579,7 +579,7 @@ class ScreenCapture:
             elif unit == "시간":
                 # 0.0167시간 (1분) ~ 48시간
                 if not (0.0167 <= value <= 48):
-                    messagebox.showerror("입력 오류", "삭제 주기는 1분(0.0167시간)에서 48시간 사이로 설정해야 합니다.")
+                    messagebox.showerror("입력 오류", "삭제 주기는 1분에서 48시간 사이로 설정해야 합니다.")
                     return False
             return True
         except ValueError:
@@ -587,7 +587,7 @@ class ScreenCapture:
             return False
 
     def toggle_cleanup_settings(self):
-        """순환 삭제 설정 토글"""
+        """자동 삭제 설정 토글"""
         if self.rolling_cleanup_enabled.get():
             # 유효성 검사
             if not self.validate_cleanup_interval():
@@ -619,7 +619,7 @@ class ScreenCapture:
             else:
                 self.rolling_cleanup.update_cleanup_age(cleanup_age_seconds)
 
-            self.cleanup_info.config(text=f"{cleanup_age_value}{unit}마다 오래된 파일 삭제", foreground="blue")
+            self.cleanup_info.config(text=f"{cleanup_age_value}{unit}을 초과한 파일을 10분마다 삭제", foreground="blue")
             # self.start_cleanup_timer() # -> 캡처 시작 버튼으로 이동
             
         else:
@@ -627,7 +627,7 @@ class ScreenCapture:
             if self.rolling_cleanup is not None:
                 self.rolling_cleanup.stop()
                 self.rolling_cleanup = None
-            self.cleanup_info.config(text="순환 삭제가 비활성화되었습니다", foreground="gray")
+            self.cleanup_info.config(text="자동 삭제가 비활성화되었습니다", foreground="gray")
             self.next_cleanup_label.config(text="다음 삭제까지: --")
             self.stop_cleanup_timer()
     
@@ -843,12 +843,12 @@ class ScreenCapture:
         return img_with_text
     
     def capture_screen(self):
-        """화면 캡처 함수"""
+        """화면 모니터링 함수"""
         capture_count = 0
         
         while self.is_capturing and not self.stop_event.is_set():
             try:
-                # 전체 화면 캡처
+                # 전체 화면 모니터링
                 screenshot = ImageGrab.grab()
                 
                 # 현재 시간 오버레이 추가
@@ -911,7 +911,7 @@ class ScreenCapture:
                 self.interval_info.config(text="❌ 올바른 숫자를 입력하세요", foreground="red")
                 return
             
-            # 순환 삭제 설정 검증 (활성화된 경우)
+            # 자동 삭제 설정 검증 (활성화된 경우)
             if self.rolling_cleanup_enabled.get():
                 if not self.validate_cleanup_interval():
                     return
@@ -938,7 +938,7 @@ class ScreenCapture:
             self.capture_thread = threading.Thread(target=self.capture_screen, daemon=True)
             self.capture_thread.start()
 
-            # 순환 삭제가 활성화되어 있으면 타이머 시작
+            # 자동 삭제가 활성화되어 있으면 타이머 시작
             if self.rolling_cleanup_enabled.get():
                 self.start_cleanup_timer()
             
@@ -948,7 +948,7 @@ class ScreenCapture:
             self.start_button.config(text="캡처 시작")
             self.status_label.config(text="캡처 정지됨")
             
-            # 순환 삭제 타이머 중지
+            # 자동 삭제 타이머 중지
             if self.rolling_cleanup_enabled.get():
                 self.stop_cleanup_timer()
 
@@ -959,12 +959,12 @@ class ScreenCapture:
             # 경로 변경 버튼 다시 활성화
             self.path_button.config(state='normal')
             
-            # 순환 삭제 설정 다시 활성화
+            # 자동 삭제 설정 다시 활성화
             self.cleanup_checkbox.config(state='normal')
             self.cleanup_age_entry.config(state='normal')
             self.cleanup_unit_combo.config(state='normal')
             
-            # 순환 삭제 정보 초기화 (순환 삭제 스레드는 독립적으로 동작)
+            # 자동 삭제 정보 초기화 (자동 삭제 스레드는 독립적으로 동작)
             # self.next_cleanup_label.config(text="") -> 타이머가 관리하므로 주석 처리
     
     def quit_program(self):
@@ -986,10 +986,10 @@ class ScreenCapture:
                 else:
                     self.logger.info("캡처 스레드 정리 완료")
         
-        # 순환 삭제 스레드 중지
+        # 자동 삭제 스레드 중지
         if self.rolling_cleanup is not None:
             self.rolling_cleanup.stop()
-            self.logger.info("순환 삭제 스레드 정리 완료")
+            self.logger.info("자동 삭제 스레드 정리 완료")
 
         # 리소스 모니터링 중지
         if self.resource_monitor_enabled.get():
