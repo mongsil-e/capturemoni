@@ -7,6 +7,8 @@ import os
 import psutil
 import logging
 from datetime import datetime
+import pystray
+from pystray import MenuItem as item
 
 
 class RollingCleanup:
@@ -216,6 +218,10 @@ class ScreenCapture:
         # 스레드 종료 신호
         self.stop_event = threading.Event()
 
+        # 시스템 트레이 관련 변수
+        self.tray_icon = None
+        self.tray_thread = None
+
         # 이미지 설정
         self.image_format = tk.StringVar(value="JPEG")  # "JPEG" 또는 "WEBP"
         self.image_quality = tk.IntVar(value=15)  # 1-100
@@ -232,6 +238,9 @@ class ScreenCapture:
 
         # 리소스 모니터링 시작
         self.start_resource_monitoring()
+
+        # 시스템 트레이 초기화
+        self.setup_system_tray()
 
         # GUI가 완전히 로드된 후 자동으로 캡처 시작
         self.root.after(100, self.start_capture_automatically)
@@ -494,7 +503,7 @@ class ScreenCapture:
         self.quit_button.pack(side=tk.RIGHT, padx=(15, 30), pady=10, ipady=10)
         
         # 창 닫기 이벤트 처리
-        self.root.protocol("WM_DELETE_WINDOW", self.quit_program)
+        self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
 
     def update_quality_display(self, value=None):
         """품질 값이 변경될 때 정수로 변환하여 표시"""
@@ -512,6 +521,60 @@ class ScreenCapture:
         except (ValueError, TypeError):
             # 변환 실패 시 현재 값 유지
             pass
+
+    def setup_system_tray(self):
+        """시스템 트레이 설정"""
+        try:
+            # 트레이 아이콘 이미지 생성 (단색 아이콘)
+            icon_image = Image.new('RGB', (64, 64), color=(0, 123, 255))
+            draw = ImageDraw.Draw(icon_image)
+            # 간단한 카메라 아이콘 모양 그리기
+            draw.rectangle([16, 20, 48, 44], fill=(255, 255, 255))
+            draw.rectangle([20, 16, 44, 20], fill=(255, 255, 255))
+            draw.ellipse([22, 26, 30, 34], fill=(0, 0, 0))
+
+            # 트레이 메뉴 생성
+            menu = (
+                item('화면 모니터링 표시', self.show_window),
+                item('모니터링 시작', self.start_capture_from_tray),
+                item('모니터링 정지', self.stop_capture_from_tray),
+                item('종료', self.quit_program)
+            )
+
+            # 시스템 트레이 아이콘 생성
+            self.tray_icon = pystray.Icon(
+                "screen_capture",
+                icon_image,
+                "화면 모니터링",
+                menu
+            )
+
+            # 트레이 아이콘을 별도 스레드에서 실행
+            self.tray_thread = threading.Thread(target=self.tray_icon.run, daemon=True)
+            self.tray_thread.start()
+
+        except Exception as e:
+            self.logger.error(f"시스템 트레이 설정 실패: {str(e)}")
+
+    def show_window(self):
+        """GUI 창 표시"""
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def hide_window(self):
+        """GUI 창 숨김"""
+        self.root.withdraw()
+
+    def start_capture_from_tray(self):
+        """트레이 메뉴에서 모니터링 시작"""
+        if not self.is_capturing:
+            self.start_capture_automatically()
+
+    def stop_capture_from_tray(self):
+        """트레이 메뉴에서 모니터링 정지"""
+        if self.is_capturing:
+            self.toggle_capture()
     
     def validate_interval(self, event=None):
         """간격 입력값 실시간 검증"""
@@ -1158,10 +1221,54 @@ class ScreenCapture:
         # 종료 확인
         if messagebox.askokcancel("종료", "프로그램을 종료하시겠습니까?"):
             self.logger.info("프로그램 종료 확인됨")
+
+            # 시스템 트레이 정리
+            if self.tray_icon:
+                self.tray_icon.stop()
+
             self.root.destroy()
+
+    def show_startup_message(self):
+        """시작 메시지 표시"""
+        try:
+            # 시작 메시지 창 생성
+            startup_window = tk.Toplevel(self.root)
+            startup_window.title("")
+            startup_window.geometry("300x100")
+            startup_window.resizable(False, False)
+            startup_window.attributes("-topmost", True)  # 항상 위에 표시
+
+            # 창을 화면 중앙에 위치시키기
+            startup_window.update_idletasks()
+            width = startup_window.winfo_width()
+            height = startup_window.winfo_height()
+            x = (startup_window.winfo_screenwidth() // 2) - (width // 2)
+            y = (startup_window.winfo_screenheight() // 2) - (height // 2)
+            startup_window.geometry(f"+{x}+{y}")
+
+            # 메시지 라벨
+            message_label = tk.Label(
+                startup_window,
+                text="모니터링 시작",
+                font=("Arial", 16, "bold"),
+                fg="blue"
+            )
+            message_label.pack(expand=True)
+
+            # 1.5초 후 자동으로 창 닫기
+            startup_window.after(1500, startup_window.destroy)
+
+        except Exception as e:
+            self.logger.error(f"시작 메시지 표시 실패: {str(e)}")
     
     def run(self):
         """프로그램 실행"""
+        # 시작 메시지 표시
+        self.show_startup_message()
+
+        # GUI 창 숨김 (시스템 트레이로 실행)
+        self.root.after(500, self.hide_window)  # 0.5초 후 숨김
+
         self.root.mainloop()
 
 
