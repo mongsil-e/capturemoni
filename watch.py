@@ -1063,8 +1063,16 @@ class ScreenCapture:
         
         while self.is_capturing and not self.stop_event.is_set():
             try:
-                # 전체 화면 모니터링
-                screenshot = ImageGrab.grab()
+                # 전체 화면 모니터링 (PIL 에러 처리 강화)
+                try:
+                    screenshot = ImageGrab.grab()
+                except (OSError, RuntimeError) as pil_error:
+                    # PIL 라이브러리 관련 시스템 에러
+                    error_msg = f"PIL 화면 캡처 실패: {str(pil_error)}"
+                    self.logger.error(error_msg)
+                    self.root.after(0, self.update_status, f"PIL 캡처 에러 - 잠시 후 재시도", capture_count)
+                    time.sleep(3)  # PIL 에러는 더 긴 대기 시간
+                    continue
                 
                 # 현재 시간 오버레이 추가
                 screenshot_with_time = self.add_timestamp_overlay(screenshot)
@@ -1074,9 +1082,16 @@ class ScreenCapture:
                     width, height = map(int, self.image_resolution.get().split('x'))
                     screenshot_with_time.thumbnail((width, height), Image.LANCZOS)
 
-                # 흑백 변환 적용
+                # 흑백 변환 적용 (PIL 메모리 최적화)
                 if self.image_grayscale.get():
-                    screenshot_with_time = screenshot_with_time.convert('L')
+                    try:
+                        screenshot_with_time = screenshot_with_time.convert('L')
+                    except MemoryError:
+                        self.logger.warning("메모리 부족으로 흑백 변환 실패 - 원본 유지")
+                        # 메모리 부족 시 흑백 변환 생략
+                    except Exception as e:
+                        self.logger.error(f"흑백 변환 중 PIL 에러: {str(e)}")
+                        # 변환 실패 시 원본 유지
 
                 # 파일명 생성 (타임스탬프 포함)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # 밀리초까지
