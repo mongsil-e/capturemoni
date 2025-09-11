@@ -1041,6 +1041,22 @@ class ScreenCapture:
         
         return img_with_text
     
+    def get_system_status(self):
+        """시스템 상태 정보 수집"""
+        try:
+            # 메모리 정보
+            import psutil
+            memory = psutil.virtual_memory()
+            memory_info = f"메모리: {memory.percent:.1f}% 사용 ({memory.available//1024//1024}MB 사용가능)"
+
+            # 디스크 정보
+            disk = psutil.disk_usage(self.save_folder)
+            disk_info = f"디스크: {disk.percent:.1f}% 사용 ({disk.free//1024//1024//1024}GB 사용가능)"
+
+            return f"{memory_info}, {disk_info}"
+        except:
+            return "시스템 상태 확인 불가"
+
     def capture_screen(self):
         """화면 모니터링 함수"""
         capture_count = 0
@@ -1087,9 +1103,34 @@ class ScreenCapture:
                 interval = self.capture_interval.get()
                 time.sleep(interval)
                 
+            except OSError as e:
+                # 시스템 리소스 관련 에러
+                system_status = self.get_system_status()
+                error_msg = f"시스템 리소스 오류: {str(e)} [{system_status}]"
+                self.logger.error(error_msg)
+                self.root.after(0, self.update_status, "시스템 리소스 오류 발생 - 잠시 후 재시도", capture_count)
+                time.sleep(2)  # 잠시 대기 후 재시도
+                continue
+            except MemoryError as e:
+                # 메모리 부족 에러
+                system_status = self.get_system_status()
+                error_msg = f"메모리 부족 오류: {str(e)} [{system_status}]"
+                self.logger.error(error_msg)
+                self.root.after(0, self.update_status, "메모리 부족 - 메모리 정리 후 재시도", capture_count)
+                gc.collect()  # 메모리 정리 시도
+                time.sleep(5)  # 메모리 회복 대기
+                continue
+            except PermissionError as e:
+                # 권한 관련 에러
+                error_msg = f"권한 오류: {str(e)}"
+                self.logger.error(error_msg)
+                self.root.after(0, self.update_status, error_msg, capture_count)
+                break
             except Exception as e:
-                # 에러 발생 시 GUI 업데이트
-                self.root.after(0, self.update_status, f"에러 발생: {str(e)}", capture_count)
+                # 기타 예기치 않은 에러
+                error_msg = f"예기치 않은 오류: {str(e)}"
+                self.logger.exception(error_msg)
+                self.root.after(0, self.update_status, error_msg, capture_count)
                 break
     
     def update_status(self, status_text, count):
