@@ -8,7 +8,7 @@ import psutil
 import logging
 from datetime import datetime
 import pystray
-from pystray import MenuItem as item
+from pystray import MenuItem as item, Menu
 
 
 class RollingCleanup:
@@ -522,6 +522,43 @@ class ScreenCapture:
             # 변환 실패 시 현재 값 유지
             pass
 
+    def create_tray_menu(self):
+        """동적으로 트레이 메뉴 생성"""
+        menu_items = []
+
+        # 화면 모니터링 표시 메뉴 (항상 활성화)
+        menu_items.append(item('화면 모니터링 표시', self.show_window))
+
+        # 모니터링 시작 메뉴 (캡처 중이 아닐 때만 활성화)
+        if not self.is_capturing:
+            menu_items.append(item('▶ 모니터링 시작', self.start_capture_from_tray))
+        else:
+            # 캡처 중일 때는 상태 표시 (클릭 불가)
+            menu_items.append(item('⏸ 모니터링 시작 (실행 중)', None))
+
+        # 모니터링 정지 메뉴 (캡처 중일 때만 활성화)
+        if self.is_capturing:
+            menu_items.append(item('⏹ 모니터링 정지', self.stop_capture_from_tray))
+        else:
+            # 캡처 중이 아닐 때는 상태 표시 (클릭 불가)
+            menu_items.append(item('⏸ 모니터링 정지 (정지됨)', None))
+
+        # 종료 메뉴 (항상 활성화)
+        menu_items.append(item('종료', self.quit_program))
+
+        # pystray.Menu 객체로 반환
+        return Menu(*menu_items)
+
+    def update_tray_menu(self):
+        """트레이 메뉴 업데이트"""
+        try:
+            if self.tray_icon:
+                # 새로운 메뉴로 설정
+                new_menu = self.create_tray_menu()
+                self.tray_icon.menu = new_menu
+        except Exception as e:
+            self.logger.error(f"트레이 메뉴 업데이트 실패: {str(e)}")
+
     def setup_system_tray(self):
         """시스템 트레이 설정"""
         try:
@@ -533,20 +570,12 @@ class ScreenCapture:
             draw.rectangle([20, 16, 44, 20], fill=(255, 255, 255))
             draw.ellipse([22, 26, 30, 34], fill=(0, 0, 0))
 
-            # 트레이 메뉴 생성
-            menu = (
-                item('화면 모니터링 표시', self.show_window),
-                item('모니터링 시작', self.start_capture_from_tray),
-                item('모니터링 정지', self.stop_capture_from_tray),
-                item('종료', self.quit_program)
-            )
-
-            # 시스템 트레이 아이콘 생성
+            # 시스템 트레이 아이콘 생성 (초기 메뉴 설정)
             self.tray_icon = pystray.Icon(
                 "screen_capture",
                 icon_image,
                 "화면 모니터링",
-                menu
+                self.create_tray_menu()
             )
 
             # 트레이 아이콘을 별도 스레드에서 실행
@@ -570,11 +599,15 @@ class ScreenCapture:
         """트레이 메뉴에서 모니터링 시작"""
         if not self.is_capturing:
             self.start_capture_automatically()
+            # 트레이 메뉴 업데이트
+            self.update_tray_menu()
 
     def stop_capture_from_tray(self):
         """트레이 메뉴에서 모니터링 정지"""
         if self.is_capturing:
             self.toggle_capture()
+            # 트레이 메뉴 업데이트
+            self.update_tray_menu()
     
     def validate_interval(self, event=None):
         """간격 입력값 실시간 검증"""
@@ -1092,6 +1125,9 @@ class ScreenCapture:
             self.start_button.config(text="캡처 정지")
             self.status_label.config(text="자동 캡처 시작됨...")
 
+            # 트레이 메뉴 업데이트
+            self.update_tray_menu()
+
             # 간격 입력 필드 비활성화 (캡처 중에는 변경 불가)
             self.interval_entry.config(state='readonly')
             self.apply_button.config(state='disabled')
@@ -1142,6 +1178,9 @@ class ScreenCapture:
             self.start_button.config(text="캡처 정지")
             self.status_label.config(text="캡처 준비 중...")
 
+            # 트레이 메뉴 업데이트
+            self.update_tray_menu()
+
             # 간격 입력 필드 비활성화 (캡처 중에는 변경 불가)
             self.interval_entry.config(state='readonly')
             self.apply_button.config(state='disabled')
@@ -1167,6 +1206,9 @@ class ScreenCapture:
             self.is_capturing = False
             self.start_button.config(text="캡처 시작")
             self.status_label.config(text="캡처 정지됨")
+
+            # 트레이 메뉴 업데이트
+            self.update_tray_menu()
 
             # 자동 삭제 타이머 중지
             if self.rolling_cleanup_enabled.get():
@@ -1199,6 +1241,9 @@ class ScreenCapture:
             self.apply_button.config(state='normal')
             self.path_button.config(state='normal')  # 경로 버튼 다시 활성화
             self.cleanup_checkbox.config(state='normal')  # 자동 삭제 체크박스 다시 활성화
+
+            # 트레이 메뉴 업데이트 (프로그램 종료 전 마지막 업데이트)
+            self.update_tray_menu()
             if self.capture_thread and self.capture_thread.is_alive():
                 self.capture_thread.join(timeout=5)  # 더 긴 타임아웃으로 정상 종료 대기
                 if self.capture_thread.is_alive():
