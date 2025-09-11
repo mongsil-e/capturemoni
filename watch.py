@@ -227,11 +227,14 @@ class ScreenCapture:
         self.save_folder = "screenshots"
         if not os.path.exists(self.save_folder):
             os.makedirs(self.save_folder)
-        
+
         self.setup_ui()
-        
+
         # 리소스 모니터링 시작
         self.start_resource_monitoring()
+
+        # GUI가 완전히 로드된 후 자동으로 캡처 시작
+        self.root.after(100, self.start_capture_automatically)
     
     def setup_logging(self):
         """로깅 시스템 설정"""
@@ -998,6 +1001,60 @@ class ScreenCapture:
         self.status_label.config(text=status_text)
         self.count_label.config(text=f"캡처된 이미지: {count}개")
     
+    def start_capture_automatically(self):
+        """프로그램 시작 시 자동으로 캡처 시작"""
+        try:
+            # 현재 입력값 유효성 검사
+            try:
+                interval_value = float(self.interval_entry.get())
+                if not (0.1 <= interval_value <= 3600):
+                    self.logger.warning("자동 캡처 시작 실패: 유효하지 않은 간격 값")
+                    self.status_label.config(text="자동 캡처 시작 실패 - 간격 값 확인 필요")
+                    return
+            except ValueError:
+                self.logger.warning("자동 캡처 시작 실패: 잘못된 숫자 형식")
+                self.status_label.config(text="자동 캡처 시작 실패 - 숫자 값 확인 필요")
+                return
+
+            # 자동 삭제 설정 검증 (활성화된 경우)
+            if self.rolling_cleanup_enabled.get():
+                if not self.validate_cleanup_interval():
+                    self.logger.warning("자동 캡처 시작 실패: 자동 삭제 설정 검증 실패")
+                    self.status_label.config(text="자동 캡처 시작 실패 - 삭제 설정 확인 필요")
+                    return
+
+            # 캡처 시작
+            self.is_capturing = True
+            self.stop_event.clear()  # 중지 신호 초기화
+            self.start_button.config(text="캡처 정지")
+            self.status_label.config(text="자동 캡처 시작됨...")
+
+            # 간격 입력 필드 비활성화 (캡처 중에는 변경 불가)
+            self.interval_entry.config(state='readonly')
+            self.apply_button.config(state='disabled')
+
+            # 경로 변경 버튼 비활성화 (캡처 중에는 변경 불가)
+            self.path_button.config(state='disabled')
+
+            # 자동 삭제 설정 비활성화 (캡처 중에는 변경 불가)
+            self.cleanup_checkbox.config(state='disabled')
+            self.cleanup_age_entry.config(state='readonly')
+            self.cleanup_unit_combo.config(state='readonly')
+
+            # 별도 스레드에서 캡처 시작
+            self.capture_thread = threading.Thread(target=self.capture_screen, daemon=True)
+            self.capture_thread.start()
+
+            # 자동 삭제가 활성화되어 있으면 타이머 시작
+            if self.rolling_cleanup_enabled.get():
+                self.start_cleanup_timer()
+
+            self.logger.info("자동 캡처 시작됨")
+
+        except Exception as e:
+            self.logger.error(f"자동 캡처 시작 중 오류: {str(e)}")
+            self.status_label.config(text=f"자동 캡처 시작 실패: {str(e)}")
+
     def toggle_capture(self):
         """캡처 시작/정지 토글"""
         if not self.is_capturing:
@@ -1010,30 +1067,30 @@ class ScreenCapture:
             except ValueError:
                 self.interval_info.config(text="❌ 올바른 숫자를 입력하세요", foreground="red")
                 return
-            
+
             # 자동 삭제 설정 검증 (활성화된 경우)
             if self.rolling_cleanup_enabled.get():
                 if not self.validate_cleanup_interval():
                     return
-            
+
             # 캡처 시작
             self.is_capturing = True
             self.stop_event.clear()  # 중지 신호 초기화
             self.start_button.config(text="캡처 정지")
             self.status_label.config(text="캡처 준비 중...")
-            
+
             # 간격 입력 필드 비활성화 (캡처 중에는 변경 불가)
             self.interval_entry.config(state='readonly')
             self.apply_button.config(state='disabled')
-            
+
             # 경로 변경 버튼 비활성화 (캡처 중에는 변경 불가)
             self.path_button.config(state='disabled')
-            
+
             # 자동 삭제 설정 비활성화 (캡처 중에는 변경 불가)
             self.cleanup_checkbox.config(state='disabled')
             self.cleanup_age_entry.config(state='readonly')
             self.cleanup_unit_combo.config(state='readonly')
-            
+
             # 별도 스레드에서 캡처 시작
             self.capture_thread = threading.Thread(target=self.capture_screen, daemon=True)
             self.capture_thread.start()
@@ -1041,13 +1098,13 @@ class ScreenCapture:
             # 자동 삭제가 활성화되어 있으면 타이머 시작
             if self.rolling_cleanup_enabled.get():
                 self.start_cleanup_timer()
-            
+
         else:
             # 캡처 정지
             self.is_capturing = False
             self.start_button.config(text="캡처 시작")
             self.status_label.config(text="캡처 정지됨")
-            
+
             # 자동 삭제 타이머 중지
             if self.rolling_cleanup_enabled.get():
                 self.stop_cleanup_timer()
@@ -1055,15 +1112,15 @@ class ScreenCapture:
             # 간격 입력 필드 다시 활성화
             self.interval_entry.config(state='normal')
             self.apply_button.config(state='normal')
-            
+
             # 경로 변경 버튼 다시 활성화
             self.path_button.config(state='normal')
-            
+
             # 자동 삭제 설정 다시 활성화
             self.cleanup_checkbox.config(state='normal')
             self.cleanup_age_entry.config(state='normal')
             self.cleanup_unit_combo.config(state='normal')
-            
+
             # 자동 삭제 정보 초기화 (자동 삭제 스레드는 독립적으로 동작)
             # self.next_cleanup_label.config(text="") -> 타이머가 관리하므로 주석 처리
     
