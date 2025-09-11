@@ -182,7 +182,7 @@ class ScreenCapture:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("화면 모니터링")
-        self.root.geometry("450x900")  # 높이 증가 (이미지 설정 영역 추가)
+        self.root.geometry("450x950")  # 높이 증가 (이미지 설정 영역 추가)
         self.root.resizable(False, False)
         
         # 로깅 설정
@@ -196,9 +196,12 @@ class ScreenCapture:
         self.capture_interval = tk.DoubleVar(value=2.0)
         
         # 자동 삭제 설정 (Rolling Cleanup) - 10분마다 설정된 시간이 지난 파일 삭제
-        self.rolling_cleanup_enabled = tk.BooleanVar(value=False)
-        self.rolling_cleanup_age_value = tk.DoubleVar(value=1.0) # 삭제 주기 값 (기본 1시간)
+        self.rolling_cleanup_enabled = tk.BooleanVar(value=True)
+        self.rolling_cleanup_age_value = tk.DoubleVar(value=24.0) # 삭제 주기 값 (기본 24시간)
         self.rolling_cleanup_age_unit = tk.StringVar(value="시간") # 삭제 주기 단위
+
+        # 유효성 검사 진행 상태 플래그 (팝업 중복 방지)
+        self._validation_in_progress = False
         self.rolling_cleanup = None  # RollingCleanup 인스턴스
         self.cleanup_timer_job = None # 타이머 작업을 위한 변수
         
@@ -215,8 +218,8 @@ class ScreenCapture:
 
         # 이미지 설정
         self.image_format = tk.StringVar(value="JPEG")  # "JPEG" 또는 "WEBP"
-        self.image_quality = tk.IntVar(value=80)  # 1-100
-        self.image_quality_value = tk.DoubleVar(value=80.0)  # Scale용 실수 값
+        self.image_quality = tk.IntVar(value=15)  # 1-100
+        self.image_quality_value = tk.DoubleVar(value=15.0)  # Scale용 실수 값
         self.image_resolution = tk.StringVar(value="원본")  # 해상도 설정
         self.image_grayscale = tk.BooleanVar(value=False)  # 흑백 변환 설정
 
@@ -368,14 +371,22 @@ class ScreenCapture:
         
         self.cleanup_age_entry = ttk.Entry(cleanup_interval_frame, width=8, textvariable=self.rolling_cleanup_age_value)
         self.cleanup_age_entry.pack(side=tk.LEFT, padx=5)
-        
+        self.cleanup_age_entry.bind('<KeyRelease>', self.apply_cleanup_settings_immediately)
+
         self.cleanup_unit_combo = ttk.Combobox(cleanup_interval_frame, textvariable=self.rolling_cleanup_age_unit,
                                               values=["분", "시간"], state="readonly", width=5)
         self.cleanup_unit_combo.pack(side=tk.LEFT, padx=(0, 5))
+        self.cleanup_unit_combo.bind('<<ComboboxSelected>>', self.apply_cleanup_settings_immediately)
 
-        # 삭제 주기 정보 라벨
-        self.cleanup_info = ttk.Label(cleanup_frame, text="캡처 중이 아닐 때만 설정 가능합니다.",
-                                     font=("Arial", 9), foreground="gray")
+        # 경고 메시지 표시 레이블 (초기에는 보이지 않음)
+        self.cleanup_warning_label = ttk.Label(cleanup_frame, text="", font=("Arial", 9), foreground="red")
+        self.cleanup_warning_label.pack(pady=(2, 0))
+
+        # 삭제 주기 정보 라벨 (기본값 표시)
+        default_cleanup_age_value = self.rolling_cleanup_age_value.get()
+        default_unit = self.rolling_cleanup_age_unit.get()
+        self.cleanup_info = ttk.Label(cleanup_frame, text=f"{default_cleanup_age_value}{default_unit}을 초과한 파일을 10분마다 삭제",
+                                     font=("Arial", 9), foreground="blue")
         self.cleanup_info.pack(pady=(5, 0))
 
         # 다음 정리 시간 표시 라벨
@@ -568,23 +579,112 @@ class ScreenCapture:
     def validate_cleanup_interval(self):
         """자동 삭제 주기 유효성 검사"""
         try:
-            value = self.rolling_cleanup_age_value.get()
+            # Tkinter DoubleVar에서 가져온 값 처리 (숫자나 문자열일 수 있음)
+            raw_value = self.rolling_cleanup_age_value.get()
+
+            # 숫자 타입이면 문자열로 변환
+            if isinstance(raw_value, (int, float)):
+                value_str = str(raw_value)
+            else:
+                value_str = raw_value
+
             unit = self.rolling_cleanup_age_unit.get()
 
+            # 빈 문자열이나 공백만 있는 경우 체크
+            if not value_str or (isinstance(value_str, str) and value_str.strip() == ""):
+                self.show_cleanup_warning("삭제 주기를 입력해주세요. 숫자만 입력 가능합니다.")
+                return False
+
+            # 문자열을 실수로 변환
+            try:
+                value = float(value_str)
+            except (ValueError, TypeError):
+                self.show_cleanup_warning("유효한 숫자를 입력해주세요. 예: 30, 2.5")
+                return False
+
+            # 값이 0이거나 음수인 경우 체크
+            if value <= 0:
+                self.show_cleanup_warning("삭제 주기는 0보다 큰 값을 입력해주세요.")
+                return False
+
             if unit == "분":
-                # 1분 ~ 2880분 (48시간)
-                if not (1 <= value <= 2880):
-                    messagebox.showerror("입력 오류", "삭제 주기는 1분에서 2880분(48시간) 사이로 설정해야 합니다.")
+                # 1분 ~ 60분 (1시간)
+                if not (1 <= value <= 60):
+                    self.show_cleanup_warning("삭제 주기는 1분에서 60분(1시간) 사이로 설정해야 합니다.")
                     return False
             elif unit == "시간":
-                # 0.0167시간 (1분) ~ 48시간
-                if not (0.0167 <= value <= 48):
-                    messagebox.showerror("입력 오류", "삭제 주기는 1분에서 48시간 사이로 설정해야 합니다.")
+                # 1시간 ~ 525600시간(365일)
+                if not (1 <= value <= 525600):
+                    self.show_cleanup_warning("삭제 주기는 1시간에서 525600시간(365일) 사이로 설정해야 합니다.")
                     return False
+
+            # 유효성 검사 통과 시 경고 메시지 제거
+            self.clear_cleanup_warning()
             return True
-        except ValueError:
-            messagebox.showerror("입력 오류", "삭제 주기에 올바른 숫자를 입력하세요.")
+        except Exception as e:
+            # Tkinter TclError 등 모든 예외 처리
+            if "_tkinter.TclError" in str(type(e)) or "expected floating-point number" in str(e):
+                self.show_cleanup_warning("삭제 주기를 입력해주세요. 숫자만 입력 가능합니다.")
+            else:
+                self.show_cleanup_warning(f"입력값 오류: {str(e)}")
             return False
+
+    def show_cleanup_warning(self, message):
+        """삭제 주기 경고 메시지 표시"""
+        if hasattr(self, 'cleanup_warning_label'):
+            self.cleanup_warning_label.config(text=message)
+
+    def clear_cleanup_warning(self):
+        """삭제 주기 경고 메시지 제거"""
+        if hasattr(self, 'cleanup_warning_label'):
+            self.cleanup_warning_label.config(text="")
+
+    def apply_cleanup_settings_immediately(self, event=None):
+        """시간/단위 변경 시 자동 삭제 설정 즉시 적용"""
+        # 자동 삭제가 활성화되어 있지 않으면 무시
+        if not self.rolling_cleanup_enabled.get():
+            return
+
+        # 이벤트 반복 호출 방지를 위한 플래그
+        if hasattr(self, '_validation_in_progress') and self._validation_in_progress:
+            return
+
+        # 유효성 검사 진행 중 플래그 설정
+        self._validation_in_progress = True
+
+        try:
+            # 유효성 검사
+            if not self.validate_cleanup_interval():
+                return
+        finally:
+            # 유효성 검사 완료 후 플래그 해제
+            self._validation_in_progress = False
+
+        # 사용자가 입력한 값을 초 단위로 변환
+        try:
+            cleanup_age_value = self.rolling_cleanup_age_value.get()
+            unit = self.rolling_cleanup_age_unit.get()
+            if unit == "분":
+                cleanup_age_seconds = cleanup_age_value * 60
+            else:  # "시간"
+                cleanup_age_seconds = cleanup_age_value * 3600
+        except ValueError:
+            return
+
+        # RollingCleanup 인스턴스 생성 또는 업데이트
+        if self.rolling_cleanup is None:
+            self.rolling_cleanup = RollingCleanup(
+                self.save_folder,
+                self.logger,
+                self.stop_event,
+                cleanup_age_seconds
+            )
+            self.rolling_cleanup.start()
+        else:
+            self.rolling_cleanup.update_cleanup_age(cleanup_age_seconds)
+
+        # UI 텍스트 업데이트
+        self.cleanup_info.config(text=f"{cleanup_age_value}{unit}을 초과한 파일을 10분마다 삭제", foreground="blue")
 
     def toggle_cleanup_settings(self):
         """자동 삭제 설정 토글"""
@@ -621,7 +721,7 @@ class ScreenCapture:
 
             self.cleanup_info.config(text=f"{cleanup_age_value}{unit}을 초과한 파일을 10분마다 삭제", foreground="blue")
             # self.start_cleanup_timer() # -> 캡처 시작 버튼으로 이동
-            
+
         else:
             # RollingCleanup 인스턴스 중지 및 정리
             if self.rolling_cleanup is not None:
