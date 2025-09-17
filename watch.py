@@ -9,6 +9,7 @@ import logging
 from datetime import datetime
 import pystray
 from pystray import MenuItem as item, Menu
+import gc
 
 
 class RollingCleanup:
@@ -1200,8 +1201,28 @@ class ScreenCapture:
             self.capture_thread = threading.Thread(target=self.capture_screen, daemon=True)
             self.capture_thread.start()
 
-            # 자동 삭제가 활성화되어 있으면 타이머 시작
+            # 자동 삭제가 활성화되어 있으면 스레드와 타이머 시작
             if self.rolling_cleanup_enabled.get():
+                # RollingCleanup 스레드가 없으면 생성
+                if self.rolling_cleanup is None:
+                    cleanup_age_value = self.rolling_cleanup_age_value.get()
+                    unit = self.rolling_cleanup_age_unit.get()
+                    if unit == "분":
+                        cleanup_age_seconds = cleanup_age_value * 60
+                    else:  # "시간"
+                        cleanup_age_seconds = cleanup_age_value * 3600
+
+                    self.rolling_cleanup = RollingCleanup(
+                        self.save_folder,
+                        self.logger,
+                        self.stop_event,
+                        cleanup_age_seconds
+                    )
+
+                # RollingCleanup 스레드 시작
+                self.rolling_cleanup.start()
+
+                # UI 타이머도 시작
                 self.start_cleanup_timer()
 
             self.logger.info("자동 캡처 시작됨")
@@ -1253,8 +1274,28 @@ class ScreenCapture:
             self.capture_thread = threading.Thread(target=self.capture_screen, daemon=True)
             self.capture_thread.start()
 
-            # 자동 삭제가 활성화되어 있으면 타이머 시작
+            # 자동 삭제가 활성화되어 있으면 스레드와 타이머 시작
             if self.rolling_cleanup_enabled.get():
+                # RollingCleanup 스레드가 없으면 생성
+                if self.rolling_cleanup is None:
+                    cleanup_age_value = self.rolling_cleanup_age_value.get()
+                    unit = self.rolling_cleanup_age_unit.get()
+                    if unit == "분":
+                        cleanup_age_seconds = cleanup_age_value * 60
+                    else:  # "시간"
+                        cleanup_age_seconds = cleanup_age_value * 3600
+
+                    self.rolling_cleanup = RollingCleanup(
+                        self.save_folder,
+                        self.logger,
+                        self.stop_event,
+                        cleanup_age_seconds
+                    )
+
+                # RollingCleanup 스레드 시작
+                self.rolling_cleanup.start()
+
+                # UI 타이머도 시작
                 self.start_cleanup_timer()
 
         else:
@@ -1266,8 +1307,13 @@ class ScreenCapture:
             # 트레이 메뉴 업데이트
             self.update_tray_menu()
 
-            # 자동 삭제 타이머 중지
+            # 자동 삭제 스레드와 타이머 중지
             if self.rolling_cleanup_enabled.get():
+                # RollingCleanup 스레드 중지
+                if self.rolling_cleanup is not None:
+                    self.rolling_cleanup.stop()
+                    self.rolling_cleanup = None
+                # UI 타이머 중지
                 self.stop_cleanup_timer()
 
             # 간격 입력 필드 다시 활성화
@@ -1310,6 +1356,7 @@ class ScreenCapture:
         # 자동 삭제 스레드 중지
         if self.rolling_cleanup is not None:
             self.rolling_cleanup.stop()
+            self.rolling_cleanup = None
             self.logger.info("자동 삭제 스레드 정리 완료")
 
         # 리소스 모니터링 중지
