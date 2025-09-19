@@ -6,6 +6,7 @@ import time
 import os
 import psutil
 import logging
+import logging.handlers
 from datetime import datetime
 import pystray
 from pystray import MenuItem as item, Menu
@@ -230,6 +231,9 @@ class ScreenCapture:
         self.image_resolution = tk.StringVar(value="원본")  # 해상도 설정
         self.image_grayscale = tk.BooleanVar(value=False)  # 흑백 변환 설정
 
+        # 마지막 캡처 시간 기록
+        self.last_capture_time = None
+
         # 저장 폴더 설정
         self.save_folder = "screenshots"
         if not os.path.exists(self.save_folder):
@@ -247,18 +251,107 @@ class ScreenCapture:
         self.root.after(100, self.start_capture_automatically)
     
     def setup_logging(self):
-        """로깅 시스템 설정"""
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler('screen_capture.log', encoding='utf-8'),
-                logging.StreamHandler()
-            ]
-        )
-        self.logger = logging.getLogger(__name__)
+        """로깅 시스템 설정 - 일별 로그 파일 생성 및 동적 핸들러 관리"""
+        # 로그 루트 디렉토리 생성
+        self.logs_root = "logs"
+        if not os.path.exists(self.logs_root):
+            os.makedirs(self.logs_root)
+
+        # 로거 생성
+        self.logger = logging.getLogger('ScreenCapture')
+        self.logger.setLevel(logging.INFO)
+
+        # 포맷터 설정
+        self.log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+        # 콘솔 핸들러 (실시간 출력용)
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(self.log_formatter)
+        self.logger.addHandler(console_handler)
+
+        # 현재 날짜 추적용 변수
+        self.current_log_date = None
+        self.current_file_handler = None
+
+        # 파일 핸들러 초기화
+        self._update_file_handler()
+
+        # 날짜별 로테이션 핸들러 추가 (모든 로그 호출 전에 날짜 확인)
+        daily_handler = self.DailyRotatingHandler(self)
+        self.logger.addHandler(daily_handler)
+
         self.logger.info("프로그램 시작됨")
+
+    def _update_file_handler(self):
+        """현재 일에 해당하는 로그 파일 핸들러 생성/업데이트 (년 > 월 > 일 구조)"""
+        now = datetime.now()
+        current_date = now.strftime("%Y-%m-%d")  # 날짜만 추출 (시간 제외)
+
+        # 날짜가 바뀌지 않았으면 기존 핸들러 재사용
+        if self.current_log_date == current_date and self.current_file_handler is not None:
+            return
+
+        # 기존 핸들러 제거
+        if self.current_file_handler is not None:
+            self.logger.removeHandler(self.current_file_handler)
+            self.current_file_handler.close()
+
+        # 날짜 정보 추출
+        year = now.strftime("%Y")
+        month = now.strftime("%m월")
+        day = now.strftime("%d일")
+
+        # 년도별 폴더 생성
+        year_folder = os.path.join(self.logs_root, year)
+        if not os.path.exists(year_folder):
+            os.makedirs(year_folder)
+
+        # 월별 폴더 생성
+        month_folder = os.path.join(year_folder, month)
+        if not os.path.exists(month_folder):
+            os.makedirs(month_folder)
+
+        # 일별 로그 파일 경로
+        log_filename = f"{day}.log"
+        log_filepath = os.path.join(month_folder, log_filename)
+
+        # RotatingFileHandler 생성 (파일 크기 제한 및 백업)
+        self.current_file_handler = logging.handlers.RotatingFileHandler(
+            log_filepath,
+            maxBytes=10*1024*1024,  # 10MB
+            backupCount=5,
+            encoding='utf-8'
+        )
+        self.current_file_handler.setFormatter(self.log_formatter)
+
+        # 로거에 새 핸들러 추가
+        self.logger.addHandler(self.current_file_handler)
+
+        # 현재 날짜 업데이트
+        self.current_log_date = current_date
+
+        # 날짜 변경 로그 기록 (단, 프로그램 시작 시에는 기록하지 않음)
+        if self.current_log_date is not None:
+            self.logger.info(f"로그 파일 변경됨: {log_filepath}")
+
+    def _ensure_correct_log_file(self):
+        """로그 기록 전에 올바른 날짜의 파일이 선택되었는지 확인"""
+        self._update_file_handler()
     
+    class DailyRotatingHandler(logging.Handler):
+        """날짜별로 로그 파일을 자동으로 교체하는 커스텀 핸들러"""
+
+        def __init__(self, parent):
+            super().__init__()
+            self.parent = parent
+            self.setFormatter(parent.log_formatter)
+
+        def emit(self, record):
+            """로그 기록 시 날짜 확인 후 파일 핸들러 업데이트"""
+            self.parent._ensure_correct_log_file()
+            # 실제 로그 기록은 기존 file_handler가 담당하므로 여기서는 아무것도 하지 않음
+            pass
+
     def is_file_locked(self, file_path):
         """파일이 다른 프로세스에서 사용 중인지 확인"""
         try:
@@ -482,8 +575,8 @@ class ScreenCapture:
                                      font=("Arial", 10))
         self.status_label.pack(pady=5)
         
-        # 캡처된 이미지 수 표시
-        self.count_label = ttk.Label(main_frame, text="캡처된 이미지: 0개", 
+        # 마지막 캡처 시간 표시
+        self.count_label = ttk.Label(main_frame, text="마지막 캡처: 없음",
                                     font=("Arial", 9))
         self.count_label.pack(pady=5)
         
@@ -1060,8 +1153,7 @@ class ScreenCapture:
 
     def capture_screen(self):
         """화면 모니터링 함수"""
-        capture_count = 0
-        
+
         while self.is_capturing and not self.stop_event.is_set():
             try:
                 # 전체 화면 모니터링 (PIL 에러 처리 강화)
@@ -1071,10 +1163,10 @@ class ScreenCapture:
                     # PIL 라이브러리 관련 시스템 에러
                     error_msg = f"PIL 화면 캡처 실패: {str(pil_error)}"
                     self.logger.error(error_msg)
-                    self.root.after(0, self.update_status, f"PIL 캡처 에러 - 잠시 후 재시도", capture_count)
+                    self.root.after(0, self.update_status, f"PIL 캡처 에러 - 잠시 후 재시도")
                     time.sleep(3)  # PIL 에러는 더 긴 대기 시간
                     continue
-                
+
                 # 현재 시간 오버레이 추가
                 screenshot_with_time = self.add_timestamp_overlay(screenshot)
 
@@ -1108,23 +1200,23 @@ class ScreenCapture:
                         screenshot_with_time.save(filepath, "WEBP", quality=quality_value)
                     else:
                         screenshot_with_time.save(filepath, "JPEG", quality=quality_value, optimize=True)
-                
-                capture_count += 1
-                
+
+                # 마지막 캡처 시간 업데이트
+                self.last_capture_time = datetime.now()
+
                 # GUI 업데이트 (메인 스레드에서 실행)
-                self.root.after(0, self.update_status, 
-                               f"캡처 중... ({capture_count}번째)", capture_count)
-                
+                self.root.after(0, self.update_status, f"캡처 중...")
+
                 # 설정된 간격만큼 대기
                 interval = self.capture_interval.get()
                 time.sleep(interval)
-                
+
             except OSError as e:
                 # 시스템 리소스 관련 에러
                 system_status = self.get_system_status()
                 error_msg = f"시스템 리소스 오류: {str(e)} [{system_status}]"
                 self.logger.error(error_msg)
-                self.root.after(0, self.update_status, "시스템 리소스 오류 발생 - 잠시 후 재시도", capture_count)
+                self.root.after(0, self.update_status, "시스템 리소스 오류 발생 - 잠시 후 재시도")
                 time.sleep(2)  # 잠시 대기 후 재시도
                 continue
             except MemoryError as e:
@@ -1132,7 +1224,7 @@ class ScreenCapture:
                 system_status = self.get_system_status()
                 error_msg = f"메모리 부족 오류: {str(e)} [{system_status}]"
                 self.logger.error(error_msg)
-                self.root.after(0, self.update_status, "메모리 부족 - 메모리 정리 후 재시도", capture_count)
+                self.root.after(0, self.update_status, "메모리 부족 - 메모리 정리 후 재시도")
                 gc.collect()  # 메모리 정리 시도
                 time.sleep(5)  # 메모리 회복 대기
                 continue
@@ -1140,19 +1232,24 @@ class ScreenCapture:
                 # 권한 관련 에러
                 error_msg = f"권한 오류: {str(e)}"
                 self.logger.error(error_msg)
-                self.root.after(0, self.update_status, error_msg, capture_count)
+                self.root.after(0, self.update_status, error_msg)
                 break
             except Exception as e:
                 # 기타 예기치 않은 에러
                 error_msg = f"예기치 않은 오류: {str(e)}"
                 self.logger.exception(error_msg)
-                self.root.after(0, self.update_status, error_msg, capture_count)
+                self.root.after(0, self.update_status, error_msg)
                 break
     
-    def update_status(self, status_text, count):
-        """상태 및 카운트 업데이트"""
+    def update_status(self, status_text):
+        """상태 및 마지막 캡처 시간 업데이트"""
         self.status_label.config(text=status_text)
-        self.count_label.config(text=f"캡처된 이미지: {count}개")
+
+        if self.last_capture_time:
+            time_str = self.last_capture_time.strftime("%H:%M:%S")
+            self.count_label.config(text=f"마지막 캡처: {time_str}")
+        else:
+            self.count_label.config(text="마지막 캡처: 없음")
     
     def start_capture_automatically(self):
         """프로그램 시작 시 자동으로 캡처 시작"""
@@ -1334,7 +1431,7 @@ class ScreenCapture:
     def quit_program(self):
         """프로그램 종료"""
         self.logger.info("프로그램 종료 시작")
-        
+
         if self.is_capturing:
             # 캡처 중이면 먼저 정지
             self.is_capturing = False
@@ -1352,7 +1449,7 @@ class ScreenCapture:
                     self.logger.warning("캡처 스레드가 정상적으로 종료되지 않음")
                 else:
                     self.logger.info("캡처 스레드 정리 완료")
-        
+
         # 자동 삭제 스레드 중지
         if self.rolling_cleanup is not None:
             self.rolling_cleanup.stop()
@@ -1365,12 +1462,17 @@ class ScreenCapture:
             if self.resource_monitor_thread and self.resource_monitor_thread.is_alive():
                 # 리소스 모니터링 스레드는 daemon이므로 자동으로 종료됨
                 self.logger.info("리소스 모니터링 스레드 정리 완료")
-        
+
+        # 로그 핸들러 정리
+        if self.current_file_handler:
+            self.current_file_handler.close()
+            self.logger.info("로그 핸들러 정리 완료")
+
         # 종료 확인
         if messagebox.askokcancel("종료", "프로그램을 종료하시겠습니까?"):
             self.logger.info("프로그램 종료 확인됨")
 
-            # 시스템 트레이 정리
+            # 시스템 트레이 정리ㅛ79ㅛㅛ
             if self.tray_icon:
                 self.tray_icon.stop()
 
