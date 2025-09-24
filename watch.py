@@ -247,12 +247,56 @@ class ScreenCapture:
         self.root.after(100, self.start_capture_automatically)
     
     def setup_logging(self):
-        """로깅 시스템 설정"""
+        """날짜별 로깅 시스템 설정"""
+        # 현재 날짜로 로그 파일 경로 생성 (logs/년/월/일.log)
+        now = datetime.now()
+        year = now.strftime("%Y")
+        month = now.strftime("%m")
+        day = now.strftime("%d")
+
+        # 로그 폴더 경로 생성
+        log_dir = os.path.join("logs", year, month)
+        log_filename = os.path.join(log_dir, f"{day}.log")
+
+        # 로그 폴더가 없으면 생성
+        os.makedirs(log_dir, exist_ok=True)
+
+        # 날짜별 로그 핸들러 클래스
+        class DateRotatingFileHandler(logging.FileHandler):
+            def __init__(self, filename, encoding=None):
+                self.base_filename = filename
+                self.current_date = self._get_current_date()
+                super().__init__(self._get_full_filename(), encoding=encoding)
+
+            def _get_current_date(self):
+                now = datetime.now()
+                return now.strftime("%Y%m%d")
+
+            def _get_full_filename(self):
+                now = datetime.now()
+                year = now.strftime("%Y")
+                month = now.strftime("%m")
+                day = now.strftime("%d")
+                log_dir = os.path.join("logs", year, month)
+                os.makedirs(log_dir, exist_ok=True)
+                return os.path.join(log_dir, f"{day}.log")
+
+            def emit(self, record):
+                # 날짜가 바뀌었는지 확인
+                current_date = self._get_current_date()
+                if current_date != self.current_date:
+                    # 날짜가 바뀌었으면 파일 핸들러 교체
+                    self.current_date = current_date
+                    self.close()
+                    self.baseFilename = self._get_full_filename()
+                    self.stream = open(self.baseFilename, self.mode, encoding=self.encoding)
+                super().emit(record)
+
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler('screen_capture.log', encoding='utf-8'),
+                DateRotatingFileHandler(log_filename, encoding='utf-8'),
                 logging.StreamHandler()
             ]
         )
