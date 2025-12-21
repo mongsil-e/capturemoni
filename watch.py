@@ -4,12 +4,24 @@ from PIL import ImageGrab, ImageDraw, ImageFont, Image
 import threading
 import time
 import os
+import sys
 import psutil
 import logging
+import json
 from datetime import datetime
 import pystray
 from pystray import MenuItem as item, Menu
 import gc
+
+
+def get_app_path():
+    """PyInstaller 빌드 환경과 일반 Python 실행 환경 모두에서 올바른 경로 반환"""
+    if getattr(sys, 'frozen', False):
+        # PyInstaller로 빌드된 EXE 실행 시
+        return os.path.dirname(sys.executable)
+    else:
+        # 일반 Python 스크립트 실행 시
+        return os.path.dirname(os.path.abspath(__file__))
 
 
 class RollingCleanup:
@@ -190,6 +202,9 @@ class ScreenCapture:
         
         # 로깅 설정
         self.setup_logging()
+
+        # 설정 파일 경로 (PyInstaller 빌드 호환)
+        self.config_path = os.path.join(get_app_path(), "settings.json")
         
         # 캡처 상태 관리
         self.is_capturing = False
@@ -234,6 +249,9 @@ class ScreenCapture:
         self.save_folder = "screenshots"
         if not os.path.exists(self.save_folder):
             os.makedirs(self.save_folder)
+
+        # 저장된 설정 불러오기 (모든 변수 초기화 후 호출)
+        self.load_settings()
 
         self.setup_ui()
 
@@ -303,6 +321,175 @@ class ScreenCapture:
         self.logger = logging.getLogger(__name__)
         self.logger.info("프로그램 시작됨")
     
+    def load_settings(self):
+        """저장된 모든 설정 로드"""
+        try:
+            if not os.path.exists(self.config_path):
+                return
+
+            with open(self.config_path, "r", encoding="utf-8") as config_file:
+                data = json.load(config_file)
+
+            # 캡처 간격 로드
+            if "capture_interval" in data:
+                try:
+                    interval = float(data["capture_interval"])
+                    if 0.1 <= interval <= 3600:
+                        self.capture_interval.set(interval)
+                        self.logger.info(f"캡처 간격 로드됨: {interval}초")
+                except (TypeError, ValueError):
+                    pass
+
+            # 자동 삭제 설정 로드
+            raw_value = data.get("cleanup_age_value")
+            unit = data.get("cleanup_age_unit")
+
+            if raw_value is not None and unit is not None:
+                if unit in ("분", "시간"):
+                    try:
+                        cleanup_value = float(raw_value)
+                        if self._is_cleanup_value_in_range(cleanup_value, unit):
+                            self.rolling_cleanup_age_value.set(cleanup_value)
+                            self.rolling_cleanup_age_unit.set(unit)
+                            self.logger.info(f"자동 삭제 기본값 로드됨: {self._format_cleanup_value(cleanup_value)}{unit}")
+                    except (TypeError, ValueError):
+                        pass
+
+            # 자동 삭제 활성화 여부 로드
+            if "cleanup_enabled" in data:
+                self.rolling_cleanup_enabled.set(bool(data["cleanup_enabled"]))
+                self.logger.info(f"자동 삭제 활성화 상태 로드됨: {data['cleanup_enabled']}")
+
+            # 이미지 설정 로드
+            if "image_format" in data:
+                if data["image_format"] in ("JPEG", "WEBP"):
+                    self.image_format.set(data["image_format"])
+                    self.logger.info(f"이미지 포맷 로드됨: {data['image_format']}")
+
+            if "image_quality" in data:
+                try:
+                    quality = int(data["image_quality"])
+                    if 1 <= quality <= 100:
+                        self.image_quality.set(quality)
+                        self.image_quality_value.set(float(quality))
+                        self.logger.info(f"이미지 품질 로드됨: {quality}")
+                except (TypeError, ValueError):
+                    pass
+
+            if "image_resolution" in data:
+                valid_resolutions = ["원본", "1920x1080", "1280x720", "1024x768", "800x600"]
+                if data["image_resolution"] in valid_resolutions:
+                    self.image_resolution.set(data["image_resolution"])
+                    self.logger.info(f"이미지 해상도 로드됨: {data['image_resolution']}")
+
+            if "image_grayscale" in data:
+                self.image_grayscale.set(bool(data["image_grayscale"]))
+                self.logger.info(f"흑백 변환 설정 로드됨: {data['image_grayscale']}")
+
+            # 저장 경로 로드
+            if "save_folder" in data:
+                folder = data["save_folder"]
+                if folder and os.path.isdir(folder):
+                    self.save_folder = folder
+                    self.logger.info(f"저장 경로 로드됨: {folder}")
+
+            self._update_cleanup_info_label()
+
+        except (OSError, json.JSONDecodeError) as error:
+            self.logger.warning(f"설정 파일을 로드하는 중 문제가 발생하여 기본값을 사용합니다: {str(error)}")
+
+    def save_settings(self):
+        """모든 설정 저장"""
+        directory = os.path.dirname(self.config_path)
+        if directory:
+            try:
+                os.makedirs(directory, exist_ok=True)
+            except OSError as error:
+                self.logger.error(f"설정 디렉터리를 생성할 수 없습니다: {str(error)}")
+                return False
+
+        data = {
+            # 캡처 간격
+            "capture_interval": float(self.capture_interval.get()),
+            # 자동 삭제 설정
+            "cleanup_age_value": float(self.rolling_cleanup_age_value.get()),
+            "cleanup_age_unit": self.rolling_cleanup_age_unit.get(),
+            "cleanup_enabled": self.rolling_cleanup_enabled.get(),
+            # 이미지 설정
+            "image_format": self.image_format.get(),
+            "image_quality": self.image_quality.get(),
+            "image_resolution": self.image_resolution.get(),
+            "image_grayscale": self.image_grayscale.get(),
+            # 저장 경로
+            "save_folder": self.save_folder
+        }
+
+        try:
+            with open(self.config_path, "w", encoding="utf-8") as config_file:
+                json.dump(data, config_file, ensure_ascii=False, indent=2)
+            self.logger.info("모든 설정이 저장되었습니다.")
+            return True
+        except OSError as error:
+            self.logger.error(f"설정을 저장하는 중 오류 발생: {str(error)}")
+            return False
+
+    def set_cleanup_default(self):
+        """현재 자동 삭제 설정을 기본값으로 저장"""
+        if not self.validate_cleanup_interval():
+            return
+
+        try:
+            value = float(self.rolling_cleanup_age_value.get())
+        except (TypeError, ValueError, tk.TclError):
+            self.show_cleanup_warning("삭제 주기 값을 확인해주세요.")
+            return
+
+        unit = self.rolling_cleanup_age_unit.get()
+        if not self._is_cleanup_value_in_range(value, unit):
+            self.show_cleanup_warning("허용 범위를 벗어난 값입니다.")
+            return
+
+        if self.save_settings():
+            messagebox.showinfo("설정 저장 완료", "모든 설정이 저장되었습니다.\n프로그램을 재시작해도 설정이 유지됩니다.")
+            self._update_cleanup_info_label()
+        else:
+            messagebox.showerror("설정 저장 실패", "설정을 저장하는 중 문제가 발생했습니다. 로그를 확인해주세요.")
+
+    def _is_cleanup_value_in_range(self, value, unit):
+        """삭제 주기 값이 허용 범위에 있는지 확인"""
+        if value <= 0:
+            return False
+
+        if unit == "분":
+            return 1 <= value <= 60
+        if unit == "시간":
+            return 1 <= value <= 525600
+        return False
+
+    def _format_cleanup_value(self, value):
+        """삭제 주기 표시용 값 포매팅"""
+        try:
+            numeric_value = float(value)
+            if numeric_value.is_integer():
+                return str(int(numeric_value))
+            return f"{numeric_value:.2f}".rstrip('0').rstrip('.')
+        except (TypeError, ValueError):
+            return str(value)
+
+    def _update_cleanup_info_label(self):
+        """자동 삭제 정보 라벨 갱신"""
+        if not hasattr(self, "cleanup_info"):
+            return
+
+        try:
+            value = float(self.rolling_cleanup_age_value.get())
+        except (TypeError, ValueError, tk.TclError):
+            return
+
+        unit = self.rolling_cleanup_age_unit.get()
+        formatted_value = self._format_cleanup_value(value)
+        self.cleanup_info.config(text=f"{formatted_value}{unit}을 초과한 파일을 10분마다 삭제", foreground="blue")
+
     def is_file_locked(self, file_path):
         """파일이 다른 프로세스에서 사용 중인지 확인"""
         try:
@@ -440,11 +627,16 @@ class ScreenCapture:
         self.cleanup_warning_label.pack(pady=(2, 0))
 
         # 삭제 주기 정보 라벨 (기본값 표시)
-        default_cleanup_age_value = self.rolling_cleanup_age_value.get()
-        default_unit = self.rolling_cleanup_age_unit.get()
-        self.cleanup_info = ttk.Label(cleanup_frame, text=f"{default_cleanup_age_value}{default_unit}을 초과한 파일을 10분마다 삭제",
+        self.cleanup_info = ttk.Label(cleanup_frame, text="",
                                      font=("Arial", 9), foreground="blue")
         self.cleanup_info.pack(pady=(5, 0))
+
+        # 기본값 설정 버튼
+        self.default_button = ttk.Button(cleanup_frame, text="기본값 설정", command=self.set_cleanup_default)
+        self.default_button.pack(pady=(5, 0))
+
+        # 기본 라벨 초기화
+        self._update_cleanup_info_label()
 
         # 다음 정리 시간 표시 라벨
         self.next_cleanup_label = ttk.Label(cleanup_frame, text="다음 삭제까지: --",
@@ -828,7 +1020,7 @@ class ScreenCapture:
             self.rolling_cleanup.update_cleanup_age(cleanup_age_seconds)
 
         # UI 텍스트 업데이트
-        self.cleanup_info.config(text=f"{cleanup_age_value}{unit}을 초과한 파일을 10분마다 삭제", foreground="blue")
+        self._update_cleanup_info_label()
 
     def toggle_cleanup_settings(self):
         """자동 삭제 설정 토글"""
@@ -863,7 +1055,7 @@ class ScreenCapture:
             else:
                 self.rolling_cleanup.update_cleanup_age(cleanup_age_seconds)
 
-            self.cleanup_info.config(text=f"{cleanup_age_value}{unit}을 초과한 파일을 10분마다 삭제", foreground="blue")
+            self._update_cleanup_info_label()
             # self.start_cleanup_timer() # -> 캡처 시작 버튼으로 이동
 
         else:
@@ -954,7 +1146,7 @@ class ScreenCapture:
                         self.logger.error(f"프로세스 재초기화 실패: {str(e)}")
                         time.sleep(5)
                         continue
-                
+
                 # 현재 프로그램의 CPU 사용률 (1초 간격으로 측정)
                 cpu_percent = self.current_process.cpu_percent(interval=1)
                 
@@ -1240,6 +1432,7 @@ class ScreenCapture:
             self.cleanup_checkbox.config(state='disabled')
             self.cleanup_age_entry.config(state='readonly')
             self.cleanup_unit_combo.config(state='readonly')
+            self.default_button.config(state='disabled')
 
             # 별도 스레드에서 캡처 시작
             self.capture_thread = threading.Thread(target=self.capture_screen, daemon=True)
@@ -1313,6 +1506,7 @@ class ScreenCapture:
             self.cleanup_checkbox.config(state='disabled')
             self.cleanup_age_entry.config(state='readonly')
             self.cleanup_unit_combo.config(state='readonly')
+            self.default_button.config(state='disabled')
 
             # 별도 스레드에서 캡처 시작
             self.capture_thread = threading.Thread(target=self.capture_screen, daemon=True)
@@ -1371,6 +1565,7 @@ class ScreenCapture:
             self.cleanup_checkbox.config(state='normal')
             self.cleanup_age_entry.config(state='normal')
             self.cleanup_unit_combo.config(state='normal')
+            self.default_button.config(state='normal')
 
             # 자동 삭제 정보 초기화 (자동 삭제 스레드는 독립적으로 동작)
             # self.next_cleanup_label.config(text="") -> 타이머가 관리하므로 주석 처리
