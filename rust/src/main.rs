@@ -129,10 +129,20 @@ fn capture_worker(shared: Arc<Shared>, ctx: egui::Context) {
     if font.is_none() {
         logger::warn("시스템 폰트를 찾을 수 없어 타임스탬프 오버레이를 생략합니다");
     }
+    let mut logged_area = false;
     while shared.capturing.load(Ordering::Relaxed) {
         let settings = shared.settings.lock().unwrap().clone();
         match capture::grab_screen() {
             Ok(mut img) => {
+                if !logged_area {
+                    logged_area = true;
+                    logger::info(&format!(
+                        "캡처 영역: {}x{} (모니터 {}개)",
+                        img.width(),
+                        img.height(),
+                        capture::monitor_rects().len()
+                    ));
+                }
                 capture::add_timestamp_overlay(&mut img, font.as_ref());
                 let ts = chrono::Local::now().format("%Y%m%d_%H%M%S_%3f").to_string();
                 let ext = if settings.webp { "webp" } else { "jpg" };
