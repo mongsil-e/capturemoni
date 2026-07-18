@@ -1,0 +1,31 @@
+[package]
+name = "intervalcapture"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+
+[dependencies]
+eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow"] }
+image = { version = "0.24", default-features = false, features = ["jpeg", "png"] }
+webp = { version = "0.3", default-features = false }
+rusttype = "0.9"
+chrono = "0.4"
+tray-icon = "0.14"
+rfd = { version = "0.14", default-features = false }
+raw-window-handle = "0.6"
+
+[dependencies.windows-sys]
+version = "0.52"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[build-dependencies]
+winres = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

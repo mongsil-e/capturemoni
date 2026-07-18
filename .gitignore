@@ -1,0 +1,16 @@
+# Rust
+rust/target/
+
+# 실행 중 생성되는 산출물
+screenshots/
+logs/
+dist/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+Thumbs.db
+Desktop.ini
