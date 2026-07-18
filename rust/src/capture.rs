@@ -5,13 +5,41 @@ use rusttype::{point, Font, Scale};
 use std::fs;
 use std::path::Path;
 
+use windows_sys::Win32::Foundation::{BOOL, LPARAM, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleDC, CreateDCW, CreateDIBSection, DeleteDC, DeleteObject, GetDIBits,
-    SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, SRCCOPY,
+    BitBlt, CreateCompatibleDC, CreateDCW, CreateDIBSection, DeleteDC, DeleteObject,
+    EnumDisplayMonitors, GetDIBits, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    CAPTUREBLT, DIB_RGB_COLORS, HDC, HMONITOR, SRCCOPY,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
 };
+
+/// EnumDisplayMonitors 콜백 - 모니터 영역을 수집한다
+unsafe extern "system" fn monitor_enum_proc(
+    _monitor: HMONITOR,
+    _dc: HDC,
+    rect: *mut RECT,
+    lparam: LPARAM,
+) -> BOOL {
+    let rects = &mut *(lparam as *mut Vec<RECT>);
+    rects.push(*rect);
+    1
+}
+
+/// 연결된 모든 모니터의 영역 목록
+pub fn monitor_rects() -> Vec<RECT> {
+    let mut rects: Vec<RECT> = Vec::new();
+    unsafe {
+        EnumDisplayMonitors(
+            0,
+            std::ptr::null(),
+            Some(monitor_enum_proc),
+            &mut rects as *mut Vec<RECT> as LPARAM,
+        );
+    }
+    rects
+}
 
 /// 전체 가상 화면을 RGB 이미지로 캡처한다.
 pub fn grab_screen() -> Result<RgbImage, String> {
@@ -52,7 +80,33 @@ pub fn grab_screen() -> Result<RgbImage, String> {
         }
 
         let old = SelectObject(mem_dc, bitmap);
-        let ok = BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, SRCCOPY | CAPTUREBLT);
+        // 모니터별로 각각 캡처해 가상 화면 좌표 기준으로 합성한다 (멀티 모니터 전체 캡처).
+        let monitors = monitor_rects();
+        let ok = if monitors.is_empty() {
+            // 모니터 열거 실패 시 가상 화면 전체를 한 번에 캡처
+            BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, SRCCOPY | CAPTUREBLT)
+        } else {
+            let mut all_ok = 1;
+            for rc in &monitors {
+                let mw = rc.right - rc.left;
+                let mh = rc.bottom - rc.top;
+                if BitBlt(
+                    mem_dc,
+                    rc.left - x,
+                    rc.top - y,
+                    mw,
+                    mh,
+                    screen_dc,
+                    rc.left,
+                    rc.top,
+                    SRCCOPY | CAPTUREBLT,
+                ) == 0
+                {
+                    all_ok = 0;
+                }
+            }
+            all_ok
+        };
         SelectObject(mem_dc, old);
 
         let result = if ok == 0 {
