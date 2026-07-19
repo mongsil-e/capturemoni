@@ -4,6 +4,7 @@
 mod capture;
 mod cleanup;
 mod logger;
+mod settings;
 
 use cleanup::RollingCleanup;
 use eframe::egui;
@@ -243,6 +244,7 @@ struct App {
     cleanup_warning: String,
     cleanup_timer_start: Option<Instant>,
     quality: u8,
+    saved_settings: settings::AppSettings,
     started_at: Instant,
     hidden_after_start: bool,
     window_visible: bool,
@@ -252,7 +254,11 @@ impl App {
     fn new(cc: &eframe::CreationContext) -> Self {
         setup_korean_fonts(&cc.egui_ctx);
 
-        let save_folder = PathBuf::from("screenshots");
+        let loaded = settings::load();
+        if !std::path::Path::new(settings::SETTINGS_FILE).exists() {
+            settings::save(&loaded);
+        }
+        let save_folder = PathBuf::from(&loaded.save_folder);
         let _ = std::fs::create_dir_all(&save_folder);
 
         let shared = Arc::new(Shared {
@@ -260,20 +266,20 @@ impl App {
             capture_count: AtomicU64::new(0),
             status: Mutex::new("대기 중...".into()),
             settings: Mutex::new(CaptureSettings {
-                interval_secs: 2.0,
+                interval_secs: loaded.capture_interval_secs,
                 save_folder: save_folder.clone(),
-                webp: false,
-                quality: 15,
-                resolution: "원본".into(),
-                grayscale: false,
+                webp: loaded.image_format == "WEBP",
+                quality: loaded.image_quality,
+                resolution: loaded.image_resolution.clone(),
+                grayscale: loaded.image_grayscale,
             }),
-            cleanup_enabled: AtomicBool::new(true),
+            cleanup_enabled: AtomicBool::new(loaded.cleanup_enabled),
             quit: AtomicBool::new(false),
         });
         logger::info("프로그램 시작됨");
         logger::info(&format!("프로그램 PID: {}", std::process::id()));
 
-        let rolling_cleanup = RollingCleanup::new(save_folder, 24 * 3600);
+        let rolling_cleanup = RollingCleanup::new(save_folder, loaded.cleanup_age_secs());
 
         // 트레이 아이콘 설정 및 메뉴 이벤트 전달 채널
         let tray = match build_tray() {
@@ -335,15 +341,16 @@ impl App {
             shared,
             rolling_cleanup,
             tray,
-            interval_text: "2.0".into(),
+            interval_text: format!("{}", loaded.capture_interval_secs),
             interval_info: "범위: 0.1 ~ 3600초 (1시간)".into(),
             interval_info_error: false,
-            cleanup_enabled: true,
-            cleanup_age_text: "24".into(),
-            cleanup_unit_hours: true,
+            cleanup_enabled: loaded.cleanup_enabled,
+            cleanup_age_text: format!("{}", loaded.cleanup_age_value),
+            cleanup_unit_hours: loaded.cleanup_age_unit != "분",
             cleanup_warning: String::new(),
             cleanup_timer_start: None,
-            quality: 15,
+            quality: loaded.image_quality,
+            saved_settings: loaded,
             started_at: Instant::now(),
             hidden_after_start: false,
             window_visible: true,
@@ -432,6 +439,33 @@ impl App {
 
     fn stop_capture(&mut self) {
         stop_capture_shared(&self.shared, &self.rolling_cleanup);
+    }
+
+    /// 현재 상태를 AppSettings로 스냅샷 (텍스트 입력이 유효하지 않으면 마지막 저장값 유지)
+    fn current_settings(&self) -> settings::AppSettings {
+        let s = self.shared.settings.lock().unwrap();
+        let cleanup_age_value = self
+            .cleanup_age_text
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|v| *v > 0.0)
+            .unwrap_or(self.saved_settings.cleanup_age_value);
+        settings::AppSettings {
+            capture_interval_secs: s.interval_secs,
+            save_folder: s.save_folder.display().to_string(),
+            image_format: if s.webp { "WEBP".into() } else { "JPEG".into() },
+            image_quality: s.quality,
+            image_resolution: s.resolution.clone(),
+            image_grayscale: s.grayscale,
+            cleanup_enabled: self.cleanup_enabled,
+            cleanup_age_value,
+            cleanup_age_unit: if self.cleanup_unit_hours {
+                "시간".into()
+            } else {
+                "분".into()
+            },
+        }
     }
 
     fn quit(&mut self, ctx: &egui::Context) {
@@ -738,6 +772,13 @@ impl eframe::App for App {
                 });
             });
         });
+
+        // 설정이 바뀌었으면 settings.json에 즉시 저장
+        let current = self.current_settings();
+        if current != self.saved_settings {
+            settings::save(&current);
+            self.saved_settings = current;
+        }
     }
 }
 
