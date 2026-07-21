@@ -1,4 +1,4 @@
-//! 화면 모니터링 - watch.py의 Rust 마이그레이션 (Windows 7 호환)
+//! 화면 캡쳐 - watch.py의 Rust 마이그레이션 (Windows 7 호환)
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod capture;
@@ -49,15 +49,15 @@ fn sync_tray_menu(capturing: bool) {
         if let Some((start, stop)) = &*cell.borrow() {
             start.set_enabled(!capturing);
             start.set_text(if capturing {
-                "⏸ 모니터링 시작 (실행 중)"
+                "⏸ 캡처 시작 (실행 중)"
             } else {
-                "▶ 모니터링 시작"
+                "▶ 캡처 시작"
             });
             stop.set_enabled(capturing);
             stop.set_text(if capturing {
-                "⏹ 모니터링 정지"
+                "⏹ 캡처 정지"
             } else {
-                "⏸ 모니터링 정지 (정지됨)"
+                "⏸ 캡처 정지 (정지됨)"
             });
         }
     });
@@ -99,7 +99,7 @@ fn stop_capture_shared(shared: &Arc<Shared>, rolling_cleanup: &Arc<RollingCleanu
 /// 창 제목으로 메인 창 HWND를 찾는다 (CreationContext에서 핸들을 못 얻은 경우 폴백)
 fn find_main_window() -> isize {
     use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW;
-    let title: Vec<u16> = "화면 모니터링\0".encode_utf16().collect();
+    let title: Vec<u16> = "화면 캡쳐\0".encode_utf16().collect();
     unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) }
 }
 
@@ -206,16 +206,16 @@ fn build_tray() -> Result<TrayMenu, String> {
     let icon = tray_icon::Icon::from_rgba(rgba, w, h).map_err(|e| e.to_string())?;
 
     let menu = Menu::new();
-    let show_item = MenuItem::new("화면 모니터링 표시", true, None);
-    let start_item = MenuItem::new("▶ 모니터링 시작", true, None);
-    let stop_item = MenuItem::new("⏹ 모니터링 정지", true, None);
+    let show_item = MenuItem::new("화면 캡쳐 표시", true, None);
+    let start_item = MenuItem::new("▶ 캡처 시작", true, None);
+    let stop_item = MenuItem::new("⏹ 캡처 정지", true, None);
     let quit_item = MenuItem::new("종료", true, None);
     menu.append_items(&[&show_item, &start_item, &stop_item, &quit_item])
         .map_err(|e| e.to_string())?;
 
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip("화면 모니터링")
+        .with_tooltip("화면 캡쳐")
         .with_icon(icon)
         .build()
         .map_err(|e| e.to_string())?;
@@ -245,7 +245,6 @@ struct App {
     cleanup_timer_start: Option<Instant>,
     quality: u8,
     saved_settings: settings::AppSettings,
-    started_at: Instant,
     hidden_after_start: bool,
     window_visible: bool,
 }
@@ -316,7 +315,7 @@ impl App {
             let ctx = cc.egui_ctx.clone();
             MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
                 if event.id == ids.0 {
-                    // 화면 모니터링 표시
+                    // 화면 캡쳐 표시
                     show_window_raw(hwnd);
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -351,9 +350,8 @@ impl App {
             cleanup_timer_start: None,
             quality: loaded.image_quality,
             saved_settings: loaded,
-            started_at: Instant::now(),
             hidden_after_start: false,
-            window_visible: true,
+            window_visible: false,
         };
 
         // GUI 로드 후 자동으로 캡처 시작
@@ -481,8 +479,9 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // 시작 0.5초 후 트레이로 숨김 (watch.py의 run()과 동일)
-        if !self.hidden_after_start && self.started_at.elapsed() > Duration::from_millis(500) {
+        // 시작 시 창은 만들자마자 숨긴다 (트레이 상주). 창이 이미 숨겨져 있어도
+        // 첫 프레임에서 OS가 잠깐 띄우는 것을 막기 위해 한 번 더 확실히 숨긴다.
+        if !self.hidden_after_start {
             self.hidden_after_start = true;
             self.window_visible = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -519,7 +518,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.heading("화면 모니터링");
+                    ui.heading("화면 캡쳐");
                 });
                 ui.add_space(8.0);
 
@@ -811,7 +810,8 @@ fn main() -> eframe::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([450.0, 800.0])
         .with_resizable(false)
-        .with_title("화면 모니터링");
+        .with_visible(false) // 시작 시 창을 띄우지 않고 트레이에만 상주
+        .with_title("화면 캡쳐");
     if let Ok((rgba, w, h)) = load_app_icon() {
         viewport = viewport.with_icon(egui::IconData {
             rgba,
@@ -824,7 +824,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "화면 모니터링",
+        "화면 캡쳐",
         options,
         Box::new(|cc| Box::new(App::new(cc))),
     )
