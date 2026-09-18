@@ -92,8 +92,14 @@ foreach ($item in $Targets) {
     if (Test-Path $Bandizip) {
         Push-Location (Join-Path $DistDir "pack")
         try {
-            $pwArgs = if ($Password) { @("-p:$Password") } else { @() }
-            & $Bandizip c -y -aoa -r -l:9 @pwArgs "..\\$($item.ZipName)" "$($item.Folder)" | Out-Null
+            if ($Password) {
+                & $Bandizip c -y -aoa -r -l:9 "-p:$Password" "..\\$($item.ZipName)" "$($item.Folder)" | Out-Null
+            } else {
+                & $Bandizip c -y -aoa -r -l:9 "..\\$($item.ZipName)" "$($item.Folder)" | Out-Null
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw "Bandizip 압축 실패 (Exit code: $LASTEXITCODE)"
+            }
         } finally {
             Pop-Location
         }
