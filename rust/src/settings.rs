@@ -28,7 +28,7 @@ impl Default for AppSettings {
             image_resolution: "원본".into(),
             image_grayscale: false,
             cleanup_enabled: true,
-            cleanup_age_value: 24.0,
+            cleanup_age_value: 72.0,
             cleanup_age_unit: "시간".into(),
         }
     }
@@ -57,7 +57,7 @@ impl AppSettings {
             (1.0..=525600.0).contains(&self.cleanup_age_value)
         };
         if !valid_age {
-            self.cleanup_age_value = 24.0;
+            self.cleanup_age_value = 72.0;
             self.cleanup_age_unit = "시간".into();
         }
         if self.save_folder.trim().is_empty() {
