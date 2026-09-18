@@ -8,7 +8,7 @@ use std::path::Path;
 use windows_sys::Win32::Foundation::{BOOL, LPARAM, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleDC, CreateDCW, CreateDIBSection, DeleteDC, DeleteObject,
-    EnumDisplayMonitors, GetDIBits, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    EnumDisplayMonitors, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
     CAPTUREBLT, DIB_RGB_COLORS, HDC, HMONITOR, SRCCOPY,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -111,30 +111,20 @@ pub fn grab_screen() -> Result<RgbImage, String> {
 
         let result = if ok == 0 {
             Err("BitBlt 실패".into())
+        } else if bits.is_null() {
+            Err("DIBSection 비트 포인터가 null입니다".into())
         } else {
-            let mut buf = vec![0u8; (w as usize) * (h as usize) * 4];
-            let got = GetDIBits(
-                mem_dc,
-                bitmap,
-                0,
-                h as u32,
-                buf.as_mut_ptr() as *mut _,
-                &mut bmi,
-                DIB_RGB_COLORS,
-            );
-            if got == 0 {
-                Err("GetDIBits 실패".into())
-            } else {
-                // BGRA -> RGB
-                let mut rgb = Vec::with_capacity((w as usize) * (h as usize) * 3);
-                for px in buf.chunks_exact(4) {
-                    rgb.push(px[2]);
-                    rgb.push(px[1]);
-                    rgb.push(px[0]);
-                }
-                RgbImage::from_raw(w as u32, h as u32, rgb)
-                    .ok_or_else(|| "이미지 버퍼 생성 실패".to_string())
+            let pixel_count = (w as usize) * (h as usize);
+            let src_slice = std::slice::from_raw_parts(bits as *const u8, pixel_count * 4);
+            // BGRA -> RGB 변환 (사전 할당 슬라이스 zip으로 SIMD 최적화)
+            let mut rgb = vec![0u8; pixel_count * 3];
+            for (src, dst) in src_slice.chunks_exact(4).zip(rgb.chunks_exact_mut(3)) {
+                dst[0] = src[2]; // R
+                dst[1] = src[1]; // G
+                dst[2] = src[0]; // B
             }
+            RgbImage::from_raw(w as u32, h as u32, rgb)
+                .ok_or_else(|| "이미지 버퍼 생성 실패".to_string())
         };
 
         DeleteObject(bitmap);
@@ -225,7 +215,7 @@ pub fn save_image(img: RgbImage, path: &Path, opts: &SaveOptions) -> Result<(), 
 
     if let Some((w, h)) = opts.resolution {
         if dynimg.width() > w || dynimg.height() > h {
-            dynimg = dynimg.resize(w, h, image::imageops::FilterType::Lanczos3);
+            dynimg = dynimg.resize(w, h, image::imageops::FilterType::Triangle);
         }
     }
     if opts.grayscale {

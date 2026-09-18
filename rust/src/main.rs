@@ -33,6 +33,7 @@ struct Shared {
     status: Mutex<String>,
     settings: Mutex<CaptureSettings>,
     cleanup_enabled: AtomicBool,
+    window_visible: AtomicBool,
     quit: AtomicBool,
 }
 
@@ -132,6 +133,7 @@ fn capture_worker(shared: Arc<Shared>, ctx: egui::Context) {
     }
     let mut logged_area = false;
     while shared.capturing.load(Ordering::Relaxed) {
+        let start_time = Instant::now();
         let settings = shared.settings.lock().unwrap().clone();
         match capture::grab_screen() {
             Ok(mut img) => {
@@ -164,18 +166,24 @@ fn capture_worker(shared: Arc<Shared>, ctx: egui::Context) {
                         *shared.status.lock().unwrap() = format!("저장 오류 - 재시도: {}", e);
                     }
                 }
-                ctx.request_repaint();
+                // 창이 화면에 표시 중일 때만 UI repaint를 요청 (창 숨김 시 Mesa llvmpipe CPU 부하 차단)
+                if shared.window_visible.load(Ordering::Relaxed) {
+                    ctx.request_repaint();
+                }
             }
             Err(e) => {
                 logger::error(&format!("화면 캡처 실패: {}", e));
                 *shared.status.lock().unwrap() = "캡처 에러 - 잠시 후 재시도".into();
-                ctx.request_repaint();
+                if shared.window_visible.load(Ordering::Relaxed) {
+                    ctx.request_repaint();
+                }
                 std::thread::sleep(Duration::from_secs(3));
                 continue;
             }
         }
-        // 설정된 간격만큼 대기 (0.2초 단위로 중지 신호 확인)
-        let mut remaining = settings.interval_secs;
+        // 캡처+저장 소요 시간을 뺀 남은 시간만큼 대기 (저사양 PC 과열 방지를 위해 최소 0.2초 휴식 보장)
+        let elapsed = start_time.elapsed().as_secs_f64();
+        let mut remaining = (settings.interval_secs - elapsed).max(0.2);
         while remaining > 0.0 && shared.capturing.load(Ordering::Relaxed) {
             let step = remaining.min(0.2);
             std::thread::sleep(Duration::from_secs_f64(step));
@@ -273,6 +281,7 @@ impl App {
                 grayscale: loaded.image_grayscale,
             }),
             cleanup_enabled: AtomicBool::new(loaded.cleanup_enabled),
+            window_visible: AtomicBool::new(false),
             quit: AtomicBool::new(false),
         });
         logger::info("프로그램 시작됨");
@@ -316,9 +325,11 @@ impl App {
             MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
                 if event.id == ids.0 {
                     // 화면 캡쳐 표시
+                    shared2.window_visible.store(true, Ordering::SeqCst);
                     show_window_raw(hwnd);
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    ctx.request_repaint();
                 } else if event.id == ids.1 {
                     start_capture_shared(&shared2, &cleanup2, &ctx);
                 } else if event.id == ids.2 {
@@ -484,6 +495,7 @@ impl eframe::App for App {
         if !self.hidden_after_start {
             self.hidden_after_start = true;
             self.window_visible = false;
+            self.shared.window_visible.store(false, Ordering::Relaxed);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
 
@@ -507,11 +519,15 @@ impl eframe::App for App {
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.window_visible = false;
+            self.shared.window_visible.store(false, Ordering::SeqCst);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
 
-        // 트레이 이벤트를 계속 받기 위해 주기적으로 깨어남
-        ctx.request_repaint_after(Duration::from_millis(500));
+        // 창이 화면에 보일 때만 500ms 주기적 repaint를 수행 (남은 시간 카운터 등 갱신)
+        // 창이 숨겨진 상태에서는 Mesa llvmpipe CPU 소프트웨어 렌더러가 불필요하게 돌지 않도록 완전히 대기
+        if self.shared.window_visible.load(Ordering::Relaxed) {
+            ctx.request_repaint_after(Duration::from_millis(500));
+        }
 
         let capturing = self.shared.capturing.load(Ordering::Relaxed);
 
