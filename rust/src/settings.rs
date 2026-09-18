@@ -113,3 +113,44 @@ pub fn save(settings: &AppSettings) {
         Err(e) => crate::logger::warn(&format!("settings.json 직렬화 실패: {}", e)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_settings() {
+        let def = AppSettings::default();
+        assert_eq!(def.capture_interval_secs, 1.0);
+        assert_eq!(def.record_mode, "video");
+        assert_eq!(def.cleanup_age_value, 72.0);
+        assert_eq!(def.cleanup_age_unit, "시간");
+        assert_eq!(def.image_quality, 15);
+    }
+
+    #[test]
+    fn test_sanitized() {
+        let bad = AppSettings {
+            capture_interval_secs: -5.0,
+            record_mode: "invalid".into(),
+            video_segment_mins: 9999,
+            image_format: "BMP".into(),
+            image_quality: 200,
+            image_resolution: "4K".into(),
+            image_grayscale: false,
+            cleanup_enabled: true,
+            cleanup_age_value: -10.0,
+            cleanup_age_unit: "초".into(),
+            save_folder: " ".into(),
+        };
+        let fixed = bad.sanitized();
+        assert_eq!(fixed.capture_interval_secs, 1.0);
+        assert_eq!(fixed.record_mode, "video");
+        assert_eq!(fixed.image_quality, 100);
+        assert_eq!(fixed.image_format, "JPEG");
+        assert_eq!(fixed.image_resolution, "원본");
+        assert_eq!(fixed.cleanup_age_unit, "시간");
+        assert_eq!(fixed.cleanup_age_value, 72.0);
+        assert_eq!(fixed.save_folder, "screenshots");
+    }
+}
