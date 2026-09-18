@@ -9,6 +9,8 @@ pub const SETTINGS_FILE: &str = "settings.json";
 pub struct AppSettings {
     pub capture_interval_secs: f64,
     pub save_folder: String,
+    pub record_mode: String,  // "image" | "video"
+    pub video_segment_mins: u32, // 동영상 세그먼트 단위(분, 기본 60)
     pub image_format: String, // "JPEG" | "WEBP"
     pub image_quality: u8,
     pub image_resolution: String,
@@ -23,6 +25,8 @@ impl Default for AppSettings {
         Self {
             capture_interval_secs: 2.0,
             save_folder: "screenshots".into(),
+            record_mode: "image".into(),
+            video_segment_mins: 60,
             image_format: "JPEG".into(),
             image_quality: 15,
             image_resolution: "원본".into(),
@@ -39,6 +43,12 @@ impl AppSettings {
     pub fn sanitized(mut self) -> Self {
         if !(0.1..=3600.0).contains(&self.capture_interval_secs) {
             self.capture_interval_secs = 2.0;
+        }
+        if self.record_mode != "video" {
+            self.record_mode = "image".into();
+        }
+        if self.video_segment_mins == 0 || self.video_segment_mins > 1440 {
+            self.video_segment_mins = 60;
         }
         self.image_quality = self.image_quality.clamp(1, 100);
         if self.image_format != "WEBP" {
@@ -64,6 +74,11 @@ impl AppSettings {
             self.save_folder = "screenshots".into();
         }
         self
+    }
+
+    #[allow(dead_code)]
+    pub fn is_video_mode(&self) -> bool {
+        self.record_mode == "video"
     }
 
     pub fn cleanup_age_secs(&self) -> u64 {

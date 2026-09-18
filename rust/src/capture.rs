@@ -5,10 +5,10 @@ use rusttype::{point, Font, Scale};
 use std::fs;
 use std::path::Path;
 
-use windows_sys::Win32::Foundation::{BOOL, LPARAM, RECT};
+use windows_sys::Win32::Foundation::{BOOL, GetLastError, LPARAM, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleDC, CreateDCW, CreateDIBSection, DeleteDC, DeleteObject,
-    EnumDisplayMonitors, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    EnumDisplayMonitors, GetDC, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
     CAPTUREBLT, DIB_RGB_COLORS, HDC, HMONITOR, SRCCOPY,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -52,14 +52,39 @@ pub fn grab_screen() -> Result<RgbImage, String> {
             return Err("화면 크기를 가져올 수 없습니다".into());
         }
 
-        let display: Vec<u16> = "DISPLAY\0".encode_utf16().collect();
-        let screen_dc = CreateDCW(display.as_ptr(), std::ptr::null(), std::ptr::null(), std::ptr::null());
+        extern "system" {
+            fn OpenInputDesktop(flags: u32, inherit: i32, access: u32) -> isize;
+            fn SetThreadDesktop(h: isize) -> i32;
+            fn CloseDesktop(h: isize) -> i32;
+        }
+        let input_desk = OpenInputDesktop(0, 0, 0x01ff);
+        if input_desk != 0 {
+            SetThreadDesktop(input_desk);
+            CloseDesktop(input_desk);
+        }
+
+        let raw_screen_dc = GetDC(0);
+        let (screen_dc, is_created_dc) = if raw_screen_dc != 0 {
+            (raw_screen_dc, false)
+        } else {
+            let display: Vec<u16> = "DISPLAY\0".encode_utf16().collect();
+            let dc = CreateDCW(display.as_ptr(), std::ptr::null(), std::ptr::null(), std::ptr::null());
+            (dc, true)
+        };
         if screen_dc == 0 {
             return Err("화면 DC 생성 실패".into());
         }
+        let cleanup_screen_dc = |dc| {
+            if is_created_dc {
+                DeleteDC(dc);
+            } else {
+                ReleaseDC(0, dc);
+            }
+        };
+
         let mem_dc = CreateCompatibleDC(screen_dc);
         if mem_dc == 0 {
-            DeleteDC(screen_dc);
+            cleanup_screen_dc(screen_dc);
             return Err("메모리 DC 생성 실패".into());
         }
 
@@ -75,7 +100,7 @@ pub fn grab_screen() -> Result<RgbImage, String> {
         let bitmap = CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, 0, 0);
         if bitmap == 0 {
             DeleteDC(mem_dc);
-            DeleteDC(screen_dc);
+            cleanup_screen_dc(screen_dc);
             return Err("DIB 섹션 생성 실패".into());
         }
 
@@ -83,14 +108,17 @@ pub fn grab_screen() -> Result<RgbImage, String> {
         // 모니터별로 각각 캡처해 가상 화면 좌표 기준으로 합성한다 (멀티 모니터 전체 캡처).
         let monitors = monitor_rects();
         let ok = if monitors.is_empty() {
-            // 모니터 열거 실패 시 가상 화면 전체를 한 번에 캡처
-            BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, SRCCOPY | CAPTUREBLT)
+            let mut r = BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, SRCCOPY | CAPTUREBLT);
+            if r == 0 {
+                r = BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, SRCCOPY);
+            }
+            r
         } else {
-            let mut all_ok = 1;
+            let mut any_ok = 0;
             for rc in &monitors {
                 let mw = rc.right - rc.left;
                 let mh = rc.bottom - rc.top;
-                if BitBlt(
+                let mut r = BitBlt(
                     mem_dc,
                     rc.left - x,
                     rc.top - y,
@@ -100,17 +128,38 @@ pub fn grab_screen() -> Result<RgbImage, String> {
                     rc.left,
                     rc.top,
                     SRCCOPY | CAPTUREBLT,
-                ) == 0
-                {
-                    all_ok = 0;
+                );
+                if r == 0 {
+                    r = BitBlt(
+                        mem_dc,
+                        rc.left - x,
+                        rc.top - y,
+                        mw,
+                        mh,
+                        screen_dc,
+                        rc.left,
+                        rc.top,
+                        SRCCOPY,
+                    );
+                }
+                if r != 0 {
+                    any_ok = 1;
                 }
             }
-            all_ok
+            if any_ok == 0 {
+                let mut r = BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, SRCCOPY | CAPTUREBLT);
+                if r == 0 {
+                    r = BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, SRCCOPY);
+                }
+                r
+            } else {
+                1
+            }
         };
         SelectObject(mem_dc, old);
 
         let result = if ok == 0 {
-            Err("BitBlt 실패".into())
+            Err(format!("BitBlt 실패 (ok={}, last_error={})", ok, GetLastError()))
         } else if bits.is_null() {
             Err("DIBSection 비트 포인터가 null입니다".into())
         } else {
@@ -129,7 +178,7 @@ pub fn grab_screen() -> Result<RgbImage, String> {
 
         DeleteObject(bitmap);
         DeleteDC(mem_dc);
-        DeleteDC(screen_dc);
+        cleanup_screen_dc(screen_dc);
         result
     }
 }

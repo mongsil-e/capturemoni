@@ -7,7 +7,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, SystemTime};
 
 const CLEANUP_INTERVAL_SECS: u64 = 600; // 10분 고정
-const IMAGE_EXTS: [&str; 5] = ["jpg", "jpeg", "png", "bmp", "webp"];
+const TARGET_EXTS: [&str; 6] = ["jpg", "jpeg", "png", "bmp", "webp", "mp4"];
 
 pub struct RollingCleanup {
     save_folder: Mutex<PathBuf>,
@@ -110,12 +110,12 @@ impl RollingCleanup {
                 break;
             }
             let path = entry.path();
-            let is_image = path
+            let is_target = path
                 .extension()
                 .and_then(|e| e.to_str())
-                .map(|e| IMAGE_EXTS.contains(&e.to_lowercase().as_str()))
+                .map(|e| TARGET_EXTS.contains(&e.to_lowercase().as_str()))
                 .unwrap_or(false);
-            if !is_image {
+            if !is_target {
                 continue;
             }
             let mtime = match entry.metadata().and_then(|m| m.modified()) {

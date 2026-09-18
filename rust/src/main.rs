@@ -5,6 +5,7 @@ mod capture;
 mod cleanup;
 mod logger;
 mod settings;
+mod video_recorder;
 
 use cleanup::RollingCleanup;
 use eframe::egui;
@@ -21,6 +22,8 @@ const CLEANUP_TIMER_SECS: u64 = 600;
 struct CaptureSettings {
     interval_secs: f64,
     save_folder: PathBuf,
+    record_mode: String, // "image" | "video"
+    video_segment_mins: u32,
     webp: bool,
     quality: u8,
     resolution: String, // "원본" 또는 "1920x1080" 등
@@ -132,9 +135,31 @@ fn capture_worker(shared: Arc<Shared>, ctx: egui::Context) {
         logger::warn("시스템 폰트를 찾을 수 없어 타임스탬프 오버레이를 생략합니다");
     }
     let mut logged_area = false;
+    let mut video_recorder: Option<video_recorder::VideoRecorder> = None;
+
     while shared.capturing.load(Ordering::Relaxed) {
         let start_time = Instant::now();
         let settings = shared.settings.lock().unwrap().clone();
+
+        // 비디오 레코더 파라미터 동기화
+        if settings.record_mode == "video" {
+            if let Some(ref mut rec) = video_recorder {
+                rec.update_params(
+                    settings.save_folder.clone(),
+                    settings.video_segment_mins,
+                    settings.interval_secs,
+                );
+            } else {
+                video_recorder = Some(video_recorder::VideoRecorder::new(
+                    settings.save_folder.clone(),
+                    settings.video_segment_mins,
+                    settings.interval_secs,
+                ));
+            }
+        } else if let Some(mut rec) = video_recorder.take() {
+            rec.finalize_current_segment();
+        }
+
         match capture::grab_screen() {
             Ok(mut img) => {
                 if !logged_area {
@@ -147,25 +172,64 @@ fn capture_worker(shared: Arc<Shared>, ctx: egui::Context) {
                     ));
                 }
                 capture::add_timestamp_overlay(&mut img, font.as_ref());
-                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S_%3f").to_string();
-                let ext = if settings.webp { "webp" } else { "jpg" };
-                let path = settings.save_folder.join(format!("screenshot_{}.{}", ts, ext));
-                let opts = capture::SaveOptions {
-                    webp: settings.webp,
-                    quality: settings.quality,
-                    resolution: parse_resolution(&settings.resolution),
-                    grayscale: settings.grayscale,
-                };
-                match capture::save_image(img, &path, &opts) {
-                    Ok(_) => {
-                        let n = shared.capture_count.fetch_add(1, Ordering::Relaxed) + 1;
-                        *shared.status.lock().unwrap() = format!("캡처 중... ({}번째)", n);
+
+                if settings.record_mode == "video" {
+                    // 비디오 모드: 해상도 및 흑백 처리 후 비디오 레코더로 프레임 전달
+                    let processed_img = if let Some((tw, th)) = parse_resolution(&settings.resolution) {
+                        if img.width() != tw || img.height() != th {
+                            image::imageops::resize(&img, tw, th, image::imageops::FilterType::Triangle)
+                        } else {
+                            img
+                        }
+                    } else {
+                        img
+                    };
+
+                    let processed_img = if settings.grayscale {
+                        let gray = image::imageops::grayscale(&processed_img);
+                        image::RgbImage::from_fn(gray.width(), gray.height(), |x, y| {
+                            let luma = gray.get_pixel(x, y)[0];
+                            image::Rgb([luma, luma, luma])
+                        })
+                    } else {
+                        processed_img
+                    };
+
+                    if let Some(ref mut rec) = video_recorder {
+                        match rec.push_frame(&processed_img) {
+                            Ok(_) => {
+                                let n = shared.capture_count.fetch_add(1, Ordering::Relaxed) + 1;
+                                *shared.status.lock().unwrap() = format!("녹화 중... ({}프레임)", n);
+                            }
+                            Err(e) => {
+                                logger::error(&e);
+                                *shared.status.lock().unwrap() = format!("녹화 오류 - 재시도: {}", e);
+                            }
+                        }
                     }
-                    Err(e) => {
-                        logger::error(&e);
-                        *shared.status.lock().unwrap() = format!("저장 오류 - 재시도: {}", e);
+                } else {
+                    // 이미지 모드: 기존 이미지 파일 저장
+                    let ts = chrono::Local::now().format("%Y%m%d_%H%M%S_%3f").to_string();
+                    let ext = if settings.webp { "webp" } else { "jpg" };
+                    let path = settings.save_folder.join(format!("screenshot_{}.{}", ts, ext));
+                    let opts = capture::SaveOptions {
+                        webp: settings.webp,
+                        quality: settings.quality,
+                        resolution: parse_resolution(&settings.resolution),
+                        grayscale: settings.grayscale,
+                    };
+                    match capture::save_image(img, &path, &opts) {
+                        Ok(_) => {
+                            let n = shared.capture_count.fetch_add(1, Ordering::Relaxed) + 1;
+                            *shared.status.lock().unwrap() = format!("캡처 중... ({}번째)", n);
+                        }
+                        Err(e) => {
+                            logger::error(&e);
+                            *shared.status.lock().unwrap() = format!("저장 오류 - 재시도: {}", e);
+                        }
                     }
                 }
+
                 // 창이 화면에 표시 중일 때만 UI repaint를 요청 (창 숨김 시 Mesa llvmpipe CPU 부하 차단)
                 if shared.window_visible.load(Ordering::Relaxed) {
                     ctx.request_repaint();
@@ -189,6 +253,10 @@ fn capture_worker(shared: Arc<Shared>, ctx: egui::Context) {
             std::thread::sleep(Duration::from_secs_f64(step));
             remaining -= step;
         }
+    }
+
+    if let Some(mut rec) = video_recorder {
+        rec.finalize_current_segment();
     }
 }
 
@@ -252,6 +320,7 @@ struct App {
     cleanup_warning: String,
     cleanup_timer_start: Option<Instant>,
     quality: u8,
+    video_segment_text: String,
     saved_settings: settings::AppSettings,
     hidden_after_start: bool,
     window_visible: bool,
@@ -268,6 +337,9 @@ impl App {
         let save_folder = PathBuf::from(&loaded.save_folder);
         let _ = std::fs::create_dir_all(&save_folder);
 
+        // 비정상 종료된 녹화물 자동 복구
+        video_recorder::VideoRecorder::repair_incomplete_recordings(&save_folder);
+
         let shared = Arc::new(Shared {
             capturing: AtomicBool::new(false),
             capture_count: AtomicU64::new(0),
@@ -275,6 +347,8 @@ impl App {
             settings: Mutex::new(CaptureSettings {
                 interval_secs: loaded.capture_interval_secs,
                 save_folder: save_folder.clone(),
+                record_mode: loaded.record_mode.clone(),
+                video_segment_mins: loaded.video_segment_mins,
                 webp: loaded.image_format == "WEBP",
                 quality: loaded.image_quality,
                 resolution: loaded.image_resolution.clone(),
@@ -360,6 +434,7 @@ impl App {
             cleanup_warning: String::new(),
             cleanup_timer_start: None,
             quality: loaded.image_quality,
+            video_segment_text: format!("{}", loaded.video_segment_mins),
             saved_settings: loaded,
             hidden_after_start: false,
             window_visible: false,
@@ -460,9 +535,18 @@ impl App {
             .ok()
             .filter(|v| *v > 0.0)
             .unwrap_or(self.saved_settings.cleanup_age_value);
+        let video_segment_mins = self
+            .video_segment_text
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|v| (1..=1440).contains(v))
+            .unwrap_or(self.saved_settings.video_segment_mins);
         settings::AppSettings {
             capture_interval_secs: s.interval_secs,
             save_folder: s.save_folder.display().to_string(),
+            record_mode: s.record_mode.clone(),
+            video_segment_mins,
             image_format: if s.webp { "WEBP".into() } else { "JPEG".into() },
             image_quality: s.quality,
             image_resolution: s.resolution.clone(),
@@ -717,24 +801,60 @@ impl eframe::App for App {
                     );
                 });
 
-                // 이미지 설정
+                // 저장 방식 및 포맷 설정
                 ui.group(|ui| {
-                    ui.label(egui::RichText::new("이미지 설정").strong());
+                    ui.label(egui::RichText::new("저장 방식 및 포맷 설정").strong());
                     let mut settings = self.shared.settings.lock().unwrap();
                     ui.horizontal(|ui| {
-                        ui.label("포맷:");
-                        ui.radio_value(&mut settings.webp, false, "JPEG");
-                        ui.radio_value(&mut settings.webp, true, "WebP");
+                        ui.label("저장 방식:");
+                        ui.add_enabled(
+                            !capturing,
+                            egui::RadioButton::new(settings.record_mode == "image", "이미지 캡처"),
+                        ).clicked().then(|| settings.record_mode = "image".into());
+                        ui.add_enabled(
+                            !capturing,
+                            egui::RadioButton::new(settings.record_mode == "video", "동영상 녹화 (MP4)"),
+                        ).clicked().then(|| settings.record_mode = "video".into());
                     });
-                    ui.horizontal(|ui| {
-                        ui.label("품질:");
-                        if ui
-                            .add(egui::Slider::new(&mut self.quality, 1..=100))
-                            .changed()
-                        {
-                            settings.quality = self.quality;
-                        }
-                    });
+
+                    if settings.record_mode == "video" {
+                        ui.horizontal(|ui| {
+                            ui.label("파일 분할:");
+                            let edit = ui.add_enabled(
+                                !capturing,
+                                egui::TextEdit::singleline(&mut self.video_segment_text).desired_width(50.0),
+                            );
+                            ui.label("분 단위 저장");
+                            if edit.changed() {
+                                if let Ok(mins) = self.video_segment_text.trim().parse::<u32>() {
+                                    if (1..=1440).contains(&mins) {
+                                        settings.video_segment_mins = mins;
+                                    }
+                                }
+                            }
+                        });
+                        ui.label(
+                            egui::RichText::new("💡 H.264 코덱 타임랩스: 정지 화면 시 용량 80~90% 대폭 절감")
+                                .color(egui::Color32::from_rgb(0, 130, 80))
+                                .small(),
+                        );
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.label("포맷:");
+                            ui.radio_value(&mut settings.webp, false, "JPEG");
+                            ui.radio_value(&mut settings.webp, true, "WebP");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("품질:");
+                            if ui
+                                .add(egui::Slider::new(&mut self.quality, 1..=100))
+                                .changed()
+                            {
+                                settings.quality = self.quality;
+                            }
+                        });
+                    }
+
                     ui.horizontal(|ui| {
                         ui.label("해상도:");
                         egui::ComboBox::from_id_source("resolution")
@@ -754,21 +874,29 @@ impl eframe::App for App {
                 });
 
                 ui.add_space(6.0);
+                let is_video = self.shared.settings.lock().unwrap().record_mode == "video";
                 ui.vertical_centered(|ui| {
                     ui.label(self.shared.status.lock().unwrap().clone());
-                    ui.label(format!(
-                        "캡처된 이미지: {}개",
-                        self.shared.capture_count.load(Ordering::Relaxed)
-                    ));
+                    let count = self.shared.capture_count.load(Ordering::Relaxed);
+                    if is_video {
+                        ui.label(format!("녹화된 프레임: {}개", count));
+                    } else {
+                        ui.label(format!("캡처된 이미지: {}개", count));
+                    }
                 });
 
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     let btn_size = egui::vec2(160.0, 40.0);
+                    let btn_label = if capturing {
+                        if is_video { "녹화 정지" } else { "캡처 정지" }
+                    } else {
+                        if is_video { "녹화 시작" } else { "캡처 시작" }
+                    };
                     if ui
                         .add_sized(
                             btn_size,
-                            egui::Button::new(if capturing { "캡처 정지" } else { "캡처 시작" }),
+                            egui::Button::new(btn_label),
                         )
                         .clicked()
                     {
