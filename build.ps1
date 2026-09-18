@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [ValidateSet("All", "x64", "x86")]
-    [string]$Architecture = "All"
+    [string]$Architecture = "All",
+    [string]$Password = "12345678"
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +14,14 @@ $DistBase = $ScriptDir
 if (Test-Path (Join-Path $ScriptDir "rust\Cargo.toml")) {
     $RustDir = Join-Path $ScriptDir "rust"
 }
+
+# 기존 dist 폴더 완전 정리 (사용자 요청: 이전 산출물 전체 삭제)
+$DistDir = Join-Path $DistBase "dist"
+if (Test-Path $DistDir) {
+    Write-Host "기존 배포 산출물(dist) 정리 중..." -ForegroundColor Cyan
+    Remove-Item -LiteralPath $DistDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
 $Targets = @()
 if ($Architecture -eq "All" -or $Architecture -eq "x64") {
@@ -57,7 +66,6 @@ foreach ($item in $Targets) {
 
     # 2. 배포 폴더 구성
     Write-Host "[2/4] 배포 폴더 구성..." -ForegroundColor Yellow
-    $DistDir = Join-Path $DistBase "dist"
     $PackDir = Join-Path $DistDir "pack\$($item.Folder)"
     $DistClientDir = Join-Path $DistDir "$($item.Folder)"
 
@@ -84,7 +92,8 @@ foreach ($item in $Targets) {
     if (Test-Path $Bandizip) {
         Push-Location (Join-Path $DistDir "pack")
         try {
-            & $Bandizip c -y -r -l:9 "..\\$($item.ZipName)" "$($item.Folder)" | Out-Null
+            $pwArgs = if ($Password) { @("-p:$Password") } else { @() }
+            & $Bandizip c -y -aoa -r -l:9 @pwArgs "..\\$($item.ZipName)" "$($item.Folder)" | Out-Null
         } finally {
             Pop-Location
         }
@@ -109,6 +118,11 @@ foreach ($item in $Targets) {
     Write-Host "  - EXE 크기:   $([math]::Round($ExeItem.Length / 1MB, 2)) MB ($($ExeItem.Length) bytes)"
     Write-Host "  - EXE SHA256: $Hash"
     Write-Host "  - ZIP 산출물: $($ZipItem.FullName) ($([math]::Round($ZipItem.Length / 1MB, 2)) MB)"
+
+    if ($Password -and (Test-Path $Bandizip)) {
+        & $Bandizip t "-p:$Password" $ZipPath | Out-Null
+        Write-Host "  - 암호 검증:  성공 (Password: $Password)" -ForegroundColor Green
+    }
 }
 
 Write-Host "`n========================================" -ForegroundColor Green

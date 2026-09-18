@@ -23,9 +23,9 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            capture_interval_secs: 2.0,
+            capture_interval_secs: 1.0,
             save_folder: "screenshots".into(),
-            record_mode: "image".into(),
+            record_mode: "video".into(),
             video_segment_mins: 60,
             image_format: "JPEG".into(),
             image_quality: 15,
@@ -42,10 +42,10 @@ impl AppSettings {
     /// 범위를 벗어난 값을 기본 범위로 보정
     pub fn sanitized(mut self) -> Self {
         if !(0.1..=3600.0).contains(&self.capture_interval_secs) {
-            self.capture_interval_secs = 2.0;
+            self.capture_interval_secs = 1.0;
         }
-        if self.record_mode != "video" {
-            self.record_mode = "image".into();
+        if self.record_mode != "video" && self.record_mode != "image" {
+            self.record_mode = "video".into();
         }
         if self.video_segment_mins == 0 || self.video_segment_mins > 1440 {
             self.video_segment_mins = 60;

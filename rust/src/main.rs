@@ -245,11 +245,11 @@ fn capture_worker(shared: Arc<Shared>, ctx: egui::Context) {
                 continue;
             }
         }
-        // 캡처+저장 소요 시간을 뺀 남은 시간만큼 대기 (저사양 PC 과열 방지를 위해 최소 0.2초 휴식 보장)
+        // 캡처+저장 소요 시간을 뺀 남은 시간만큼 대기 (저사양 PC 과열 방지를 위해 최소 0.05초 휴식 보장)
         let elapsed = start_time.elapsed().as_secs_f64();
-        let mut remaining = (settings.interval_secs - elapsed).max(0.2);
+        let mut remaining = (settings.interval_secs - elapsed).max(0.05);
         while remaining > 0.0 && shared.capturing.load(Ordering::Relaxed) {
-            let step = remaining.min(0.2);
+            let step = remaining.min(0.1);
             std::thread::sleep(Duration::from_secs_f64(step));
             remaining -= step;
         }

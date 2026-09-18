@@ -111,6 +111,14 @@ impl VideoRecorder {
         // YUV 변환 및 H.264 인코딩
         let yuv = YUVBuffer::with_rgb(width as usize, height as usize, &rgb_data);
         let encoder = self.encoder.as_mut().ok_or("인코더가 초기화되지 않았습니다")?;
+
+        // 5프레임(약 5초)마다 또는 첫 프레임에 IDR 키프레임 강제 생성 (탐색 및 윈도우 미디어 플레이어 호환)
+        if self.frame_count_in_segment % 5 == 0 {
+            unsafe {
+                encoder.raw_api().force_intra_frame(true);
+            }
+        }
+
         let bitstream = encoder.encode(&yuv).map_err(|e| format!("H.264 인코딩 오류: {}", e))?;
 
         // NAL 파싱 (SPS, PPS, VCL 프레임 분리)
@@ -126,9 +134,9 @@ impl VideoRecorder {
                                 continue;
                             }
                             let nal_type = unit[0] & 0x1f;
-                            if nal_type == 7 && self.sps.is_empty() {
+                            if nal_type == 7 {
                                 self.sps = unit.to_vec();
-                            } else if nal_type == 8 && self.pps.is_empty() {
+                            } else if nal_type == 8 {
                                 self.pps = unit.to_vec();
                             } else if nal_type == 1 || nal_type == 5 {
                                 if nal_type == 5 {
@@ -143,6 +151,17 @@ impl VideoRecorder {
             }
         }
 
+        // 키프레임(IDR)인 경우 인밴드 SPS/PPS를 앞단에 함께 삽입하여 모든 플레이어에서 즉각 화면 디코딩 보장
+        if is_sync && !self.sps.is_empty() && !self.pps.is_empty() {
+            let mut sync_payload = Vec::new();
+            sync_payload.extend_from_slice(&(self.sps.len() as u32).to_be_bytes());
+            sync_payload.extend_from_slice(&self.sps);
+            sync_payload.extend_from_slice(&(self.pps.len() as u32).to_be_bytes());
+            sync_payload.extend_from_slice(&self.pps);
+            sync_payload.extend_from_slice(&avc_payload);
+            avc_payload = sync_payload;
+        }
+
         // 세그먼트 파일이 열려있지 않으면 시작
         if self.writer.is_none() {
             if self.sps.is_empty() || self.pps.is_empty() {
@@ -154,7 +173,7 @@ impl VideoRecorder {
 
         if let Some(ref mut writer) = self.writer {
             if !avc_payload.is_empty() {
-                let duration_ms = (self.interval_secs * 1000.0).round() as u32;
+                let duration_ms = ((self.interval_secs * 1000.0).round() as u32).max(100);
                 let sample = Mp4Sample {
                     start_time: self.current_timestamp_ms,
                     duration: duration_ms,
