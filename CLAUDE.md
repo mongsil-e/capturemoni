@@ -9,6 +9,6 @@
 ## EXE 빌드 요청 처리
 
 - 사용자가 exe 빌드, 릴리스 빌드, 배포 파일 생성을 요청하면 먼저 `docs/release-build.md`를 읽고 그 문서의 규칙과 절차에 따라 빌드한다.
-- 클라이언트 exe는 Windows 7, Windows 10, Windows 11 호환 기준으로 빌드하고, 서버 exe는 Windows 10 기준으로 빌드한다.
+- `intervalcapture.exe` 클라이언트는 Windows 7, Windows 10, Windows 11 호환 기준으로 빌드한다.
 - 빌드 후에는 `docs/release-build.md`에 적힌 검증 항목과 산출물 구성을 확인한다.
-- 클라이언트나 서버 빌드 산출물을 만들 때 `.bat` 실행 파일은 생성하지 않는다.
+- 빌드 산출물을 만들 때 `.bat` 실행 파일은 생성하지 않는다.

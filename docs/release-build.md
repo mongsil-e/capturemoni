@@ -24,7 +24,17 @@ rustflags = ["-C", "target-feature=+crt-static"]
 
 의존성 잠금: `Cargo.lock`은 Rust 1.77.2 호환을 위해 일부 크레이트(cc, jobserver, idna_adapter, unicode-segmentation 등)를 구버전으로 고정했다. 빌드는 반드시 `--locked`로 수행하고, 새 의존성을 추가할 때는 최신 stable cargo(MSRV 인식 리졸버)로 lockfile을 갱신한 뒤 1.77.2로 빌드가 되는지 확인한다.
 
-## 클라이언트 빌드 (64비트 / 32비트)
+## 간편 빌드 (build.ps1)
+
+저장소에 포함된 `build.ps1`을 실행하면 두 타깃의 릴리스 빌드, Mesa OpenGL DLL 배치 및 배포 ZIP 압축이 한 번에 수행됩니다.
+
+```powershell
+.\build.ps1                    # 64비트 및 32비트 전체 빌드 및 패키징
+.\build.ps1 -Architecture x64  # 64비트만 빌드
+.\build.ps1 -Architecture x86  # 32비트만 빌드
+```
+
+## 클라이언트 빌드 (64비트 / 32비트) 수동 절차
 
 ```powershell
 cd rust
